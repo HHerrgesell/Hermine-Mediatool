@@ -5,7 +5,7 @@ python-dotenv>=1.0.0
 python-dateutil>=2.9.0
 
 # Nextcloud (optional)
-webdav4>=1.10.0
+webdav4>=0.10.0
 
 # Retry & Error Handling
 tenacity>=8.2.3
@@ -18,9 +18,6 @@ exifread>=3.0.0
 click>=8.1.0
 colorama>=0.4.6
 tqdm>=4.66.0
-
-# Async
-asyncio-contextmanager>=1.0.0
 
 # Testing
 pytest>=7.4.0
