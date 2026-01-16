@@ -12,6 +12,8 @@ from src.api.hermine_client import HermineClient
 from src.api.nextcloud_client import NextcloudClient
 from src.storage.database import ManifestDB
 from src.storage.path_builder import PathBuilder
+from src.downloader.exif_processor import EXIFProcessor
+from src.storage.metadata_db import MetadataDB
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,11 @@ class DownloadEngine:
             'errors': 0,
             'total_size': 0
         }
+
+        # EXIF & metadata processing
+        self.exif_processor = EXIFProcessor(config)
+        self.metadata_db = MetadataDB(config.storage.base_dir / "metadata.db")
+        self.metadata_db.initialize()
 
     async def process_channel(self, channel_id: str) -> Dict:
         """Process all files from a channel."""
@@ -162,6 +169,10 @@ class DownloadEngine:
 
             logger.info(f"✓ Heruntergeladen: {media_file.filename} ({len(content) / 1024 / 1024:.2f} MB)")
 
+            # Post-process EXIF metadata for images
+            self.exif_processor.process_file(file_path, preserve_timestamp=True)
+            image_metadata = self.exif_processor.extract_metadata_for_db(file_path)
+
             # Add to database
             self.db.add_file(
                 file_id=media_file.id,
@@ -176,6 +187,11 @@ class DownloadEngine:
                 message_id=media_file.id,
                 checksum=checksum
             )
+
+            # Store extended metadata (if any)
+            if image_metadata.get('exif_available'):
+                image_metadata['exif_sanitized'] = True
+                self.metadata_db.save_image_metadata(media_file.id, image_metadata)
 
             # Upload to Nextcloud if configured
             if self.config.nextcloud.enabled and self.config.nextcloud.auto_upload:
