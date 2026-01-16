@@ -4,9 +4,6 @@ aiohttp>=3.9.0
 python-dotenv>=1.0.0
 python-dateutil>=2.9.0
 
-# Database
-sqlite3-utils>=1.0.0
-
 # Nextcloud (optional)
 webdav4>=1.10.0
 
