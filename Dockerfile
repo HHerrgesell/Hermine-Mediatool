@@ -12,10 +12,12 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Quellcode
+# Source code
 COPY src/ /app/src/
-COPY .env .env.example /app/
-COPY src/main.py /app/
+COPY .env.example /app/
+
+# Create empty .env if it doesn't exist (for development/testing)
+RUN test -f /app/.env || echo "# Configuration - see .env.example" > /app/.env
 
 # Logs und Downloads als Volumes
 VOLUME ["/app/downloads", "/app/logs"]
