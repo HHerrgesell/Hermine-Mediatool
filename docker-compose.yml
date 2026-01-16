@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  hermine-downloader:
+    build: .
+    container_name: hermine-downloader
+    volumes:
+      - ./downloads:/app/downloads
+      - ./logs:/app/logs
+      - ./.env:/app/.env:ro
+    environment:
+      LOG_LEVEL: INFO
+    restart: unless-stopped
+    networks:
+      - default
+
+volumes:
+  downloads:
+  logs:
