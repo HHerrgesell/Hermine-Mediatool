@@ -173,11 +173,17 @@ class HermineClient:
                                 file_id = file_info.get("id")
                                 file_url = file_info.get("url") or file_info.get("download_url")
 
+                                # Debug: log all available fields
+                                logger.debug(f"File fields: {list(file_info.keys())}")
+                                logger.debug(f"File ID: {file_id}, URL field: {file_url}")
+
                                 if file_url:
                                     download_url = file_url
+                                    logger.debug(f"Using URL from API: {file_url}")
                                 else:
                                     # Construct URL from file ID
                                     download_url = f"{self.base_url}/file/download/{file_id}"
+                                    logger.debug(f"Constructed URL: {download_url}")
 
                                 # Get sender info from sender object
                                 sender = msg.get("sender", {})
@@ -214,23 +220,24 @@ class HermineClient:
     async def download_file(self, url_or_id: str, timeout: int = None) -> bytes:
         """Download a file by URL or ID"""
         try:
-            # If it's a full URL, use it directly with credentials as form data
+            # Extract file ID if it's a URL
             if url_or_id.startswith('http'):
-                # Full URL provided - submit it as "url" parameter
-                data = {
-                    "device_id": self.device_id,
-                    "client_key": self.client_key,
-                    "url": url_or_id
-                }
-                download_endpoint = f"{self.base_url}/file/download"
+                file_id = url_or_id.split('/')[-1]
+                logger.debug(f"Extracted file_id from URL: {file_id}")
             else:
-                # Just an ID - submit it as "file_id" parameter
-                data = {
-                    "device_id": self.device_id,
-                    "client_key": self.client_key,
-                    "file_id": url_or_id
-                }
-                download_endpoint = f"{self.base_url}/file/download"
+                file_id = url_or_id
+                logger.debug(f"Using file_id directly: {file_id}")
+
+            # Try sending both "id" and "url" parameters
+            data = {
+                "device_id": self.device_id,
+                "client_key": self.client_key,
+                "id": file_id,
+                "url": url_or_id
+            }
+
+            logger.debug(f"Download request: POST {self.base_url}/file/download with keys: {list(data.keys())}")
+            download_endpoint = f"{self.base_url}/file/download"
 
             response = self.session.post(
                 download_endpoint,
