@@ -113,8 +113,20 @@ class HermineClient:
 
         try:
             data = self._post("security/get_private_key", {})
-            self._private_key_cache = data.get("private_key", "")
-            logger.debug("✓ Private key retrieved from API")
+            private_key = data.get("private_key", "")
+
+            # Log key format for debugging
+            key_start = private_key[:50] if len(private_key) > 50 else private_key
+            logger.debug(f"Private key starts with: {key_start[:30]}...")
+
+            # Check if key needs PEM formatting
+            if not private_key.startswith("-----BEGIN"):
+                logger.debug("Private key doesn't have PEM headers, adding them")
+                # Wrap in PEM format - try RSA PRIVATE KEY first
+                private_key = f"-----BEGIN RSA PRIVATE KEY-----\n{private_key}\n-----END RSA PRIVATE KEY-----"
+
+            self._private_key_cache = private_key
+            logger.debug("✓ Private key retrieved and formatted")
             return self._private_key_cache
         except (RequestException, ValueError) as e:
             logger.error(f"✗ Failed to get private key: {e}")
