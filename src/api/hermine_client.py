@@ -1,6 +1,8 @@
 """Hermine API Client"""
 import logging
 import asyncio
+import random
+import string
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import requests
@@ -27,7 +29,7 @@ class MediaFile:
 class HermineClient:
     """Hermine/Stashcat API Client"""
 
-    def __init__(self, base_url: str, username: str, password: str, 
+    def __init__(self, base_url: str, username: str, password: str,
                  timeout: int = 30, verify_ssl: bool = True):
         """Initialize Hermine client"""
         self.base_url = base_url.rstrip('/')
@@ -36,103 +38,162 @@ class HermineClient:
         self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.session = requests.Session()
-        self.token = None
+
+        # Generate device ID
+        self.device_id = "".join(random.choice(string.ascii_letters + string.digits)
+                                for _ in range(32))
+        self.client_key = None
+        self.user_id = None
+        self.hidden_id = None
+
+        # Set headers matching reference implementation
+        self.session.headers.update({
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Accept-Language": "en-US,en;q=0.5",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 ("
+                          "KHTML, like Gecko) Chrome/97.0.4692.99 Mobile Safari/537.36",
+        })
+
         self._authenticate()
+
+    def _post(self, url: str, data: Dict[str, Any], include_auth: bool = True) -> Dict[str, Any]:
+        """Make POST request to API"""
+        data["device_id"] = self.device_id
+        if include_auth and self.client_key:
+            data["client_key"] = self.client_key
+
+        response = self.session.post(
+            f"{self.base_url}/{url}",
+            data=data,
+            timeout=self.timeout,
+            verify=self.verify_ssl
+        )
+        response.raise_for_status()
+
+        resp_data = response.json()
+        if resp_data.get("status", {}).get("value") != "OK":
+            raise ValueError(resp_data.get("status", {}).get("message", "Unknown error"))
+        return resp_data.get("payload", {})
 
     def _authenticate(self) -> None:
         """Authenticate against Hermine API"""
         try:
-            response = self.session.post(
-                f"{self.base_url}/api/v1/auth/login",
-                json={"username": self.username, "password": self.password},
-                timeout=self.timeout,
-                verify=self.verify_ssl
-            )
-            response.raise_for_status()
-            data = response.json()
-            self.token = data.get('token') or data.get('access_token')
-            
-            if not self.token:
-                raise ValueError("No token in authentication response")
-            
-            self.session.headers.update({
-                'Authorization': f'Bearer {self.token}',
-                'Content-Type': 'application/json'
-            })
+            data = self._post("auth/login", {
+                "email": self.username,
+                "password": self.password,
+                "app_name": "hermine@thw-Chrome:97.0.4692.99-browser-4.11.1",
+                "encrypted": True,
+                "callable": True,
+            }, include_auth=False)
+
+            self.client_key = data["client_key"]
+            self.user_id = data["userinfo"]["id"]
+            self.hidden_id = data["userinfo"]["socket_id"]
+
             logger.info(f"✓ Authentifiziert als {self.username}")
-            
+
         except (RequestException, ValueError) as e:
             logger.error(f"✗ Authentifizierung fehlgeschlagen: {e}")
             raise
 
-    def get_channels(self) -> List[Dict[str, Any]]:
+    def get_companies(self) -> List[Dict[str, Any]]:
+        """Get list of companies"""
+        try:
+            data = self._post("company/member", {"no_cache": True})
+            companies = data.get("companies", [])
+            logger.info(f"✓ {len(companies)} Unternehmen gefunden")
+            return companies
+        except (RequestException, ValueError) as e:
+            logger.error(f"✗ Fehler beim Abrufen von Unternehmen: {e}")
+            raise
+
+    def get_channels(self, company_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """List all available channels"""
         try:
-            response = self.session.get(
-                f"{self.base_url}/api/v1/channels",
-                timeout=self.timeout,
-                verify=self.verify_ssl
-            )
-            response.raise_for_status()
-            channels = response.json().get('channels', [])
+            # If no company_id provided, get first company
+            if company_id is None:
+                companies = self.get_companies()
+                if not companies:
+                    logger.warning("Keine Unternehmen gefunden")
+                    return []
+                company_id = companies[0]["id"]
+
+            data = self._post("channels/subscripted", {"company": company_id})
+            channels = data.get("channels", [])
             logger.info(f"✓ {len(channels)} Kanäle gefunden")
             return channels
-        except RequestException as e:
+        except (RequestException, ValueError) as e:
             logger.error(f"✗ Fehler beim Abrufen von Kanälen: {e}")
             raise
 
-    async def get_media_files(self, channel_id: str, limit: int = 100) -> List[MediaFile]:
+    async def get_media_files(self, channel_id: str, limit: int = 30) -> List[MediaFile]:
         """Get all media files from a channel"""
         media_files = []
         offset = 0
-        
+
         try:
             while True:
-                response = self.session.get(
-                    f"{self.base_url}/api/v1/channels/{channel_id}/messages",
-                    params={'limit': limit, 'offset': offset},
-                    timeout=self.timeout,
-                    verify=self.verify_ssl
-                )
-                response.raise_for_status()
-                messages = response.json().get('messages', [])
-                
+                data = self._post("message/content", {
+                    "channel_id": channel_id,
+                    "source": "channel",
+                    "limit": limit,
+                    "offset": offset,
+                })
+
+                messages = data.get("messages", [])
+
                 if not messages:
                     break
-                
+
                 for msg in messages:
-                    attachments = msg.get('attachments', [])
-                    for att in attachments:
-                        mime_type = att.get('mime_type', '')
-                        if self._is_media_file(mime_type):
-                            media_files.append(MediaFile(
-                                file_id=att.get('id'),
-                                filename=att.get('filename'),
-                                mime_type=mime_type,
-                                size=att.get('size', 0),
-                                channel_id=channel_id,
-                                message_id=msg.get('id'),
-                                sender_id=msg.get('sender_id', ''),
-                                sender_name=msg.get('sender_name', 'Unknown'),
-                                download_url=att.get('download_url'),
-                                timestamp=msg.get('timestamp', '')
-                            ))
-                
+                    # Check if message has files
+                    files = msg.get("files", [])
+                    if files:
+                        for file_info in files:
+                            mime_type = file_info.get("type", "")
+                            if self._is_media_file(mime_type):
+                                # Build download URL
+                                file_id = file_info.get("id")
+                                download_url = f"{self.base_url}/file/download/{file_id}"
+
+                                media_files.append(MediaFile(
+                                    file_id=str(file_id),
+                                    filename=file_info.get("name", ""),
+                                    mime_type=mime_type,
+                                    size=file_info.get("size", 0),
+                                    channel_id=channel_id,
+                                    message_id=str(msg.get("id", "")),
+                                    sender_id=str(msg.get("sender_id", "")),
+                                    sender_name=msg.get("sender_name", "Unknown"),
+                                    download_url=download_url,
+                                    timestamp=str(msg.get("created_at", ""))
+                                ))
+
                 offset += limit
                 await asyncio.sleep(0.1)  # Rate limiting
-            
+
             logger.info(f"✓ {len(media_files)} Mediadateien in Kanal {channel_id}")
             return media_files
-            
-        except RequestException as e:
+
+        except (RequestException, ValueError) as e:
             logger.error(f"✗ Fehler beim Abrufen von Mediadateien: {e}")
             raise
 
     async def download_file(self, url: str, timeout: int = None) -> bytes:
         """Download a file from URL"""
         try:
+            # Add authentication parameters to download
+            params = {
+                "device_id": self.device_id,
+                "client_key": self.client_key
+            }
+
             response = self.session.get(
                 url,
+                params=params,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True

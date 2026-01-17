@@ -39,17 +39,17 @@ def list_channels(env: Optional[str]):
 
         click.secho("\n📋 Verfügbare Kanäle:\n", fg='green', bold=True)
         for i, channel in enumerate(channels, 1):
-            click.echo(f"  {i}. {channel.name}")
-            click.secho(f"     ID: {channel.id}", fg='cyan')
-            if channel.description:
-                click.echo(f"     Beschreibung: {channel.description}")
-            click.echo(f"     Mitglieder: {channel.member_count}")
+            click.echo(f"  {i}. {channel.get('name', 'Unbekannt')}")
+            click.secho(f"     ID: {channel.get('id')}", fg='cyan')
+            if channel.get('description'):
+                click.echo(f"     Beschreibung: {channel.get('description')}")
+            click.echo(f"     Mitglieder: {channel.get('member_count', 'N/A')}")
             click.echo()
 
         click.secho(f"Insgesamt: {len(channels)} Kanäle", fg='green')
 
         # Zeige wie man in .env konfiguriert
-        channel_ids = ','.join([ch.id for ch in channels[:3]])
+        channel_ids = ','.join([str(ch.get('id')) for ch in channels[:3]])
         click.secho(f"\nZum Konfigurieren in .env:", fg='yellow')
         click.echo(f"TARGET_CHANNELS={channel_ids}")
 
@@ -74,15 +74,18 @@ def list_senders(channel_id: str, env: Optional[str]):
             config.hermine.password
         )
 
+        # Get media files to extract sender information
+        media_files = asyncio.run(hermine.get_media_files(channel_id))
+
         senders = {}
-        for message in hermine.stream_all_messages(channel_id, batch_size=50):
-            if message.sender_id and message.sender_name:
-                if message.sender_id not in senders:
-                    senders[message.sender_id] = {
-                        'name': message.sender_name,
+        for media_file in media_files:
+            if media_file.sender_id and media_file.sender_name:
+                if media_file.sender_id not in senders:
+                    senders[media_file.sender_id] = {
+                        'name': media_file.sender_name,
                         'count': 0
                     }
-                senders[message.sender_id]['count'] += 1
+                senders[media_file.sender_id]['count'] += 1
 
         click.secho(f"\n👥 Absender im Kanal {channel_id}:\n", fg='green', bold=True)
 
