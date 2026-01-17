@@ -33,9 +33,9 @@ class NextcloudClient:
     def _verify_connection(self) -> None:
         """Verify WebDAV connection"""
         try:
-            # mkdir ist idempotent, löst aber einen Fehler aus, wenn der Ordner existiert –
-            # daher exist_ok=True verwenden.
-            self.client.mkdir(self.remote_path, exist_ok=True)
+            # Try to create the remote path, ignore if it already exists
+            if not self.client.exists(self.remote_path):
+                self.client.mkdir(self.remote_path)
             logger.info(f"✓ Nextcloud WebDAV verbunden: {self.webdav_url}{self.remote_path}")
         except Exception as e:
             logger.error(f"✗ WebDAV-Verbindung fehlgeschlagen: {e}")
@@ -50,7 +50,8 @@ class NextcloudClient:
         remote_dir = "/".join(remote_file_path.split("/")[:-1])
         if remote_dir:
             try:
-                self.client.mkdir(remote_dir, exist_ok=True)
+                if not self.client.exists(remote_dir):
+                    self.client.mkdir(remote_dir)
             except Exception as e:
                 # Wenn der Ordner schon existiert, ignorieren wir den Fehler
                 logger.debug(f"Could not create directory {remote_dir}: {e}")
