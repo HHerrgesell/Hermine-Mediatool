@@ -1,9 +1,7 @@
 """Nextcloud WebDAV Client"""
 import logging
 from pathlib import Path
-from typing import Optional
 from webdav4.client import Client as WebDAVClient
-from webdav4.exceptions import WebDAVException
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +15,14 @@ class NextcloudClient:
         self.username = username
         self.password = password
         self.remote_path = remote_path.strip('/')
-        
+
         # Build WebDAV URL
         self.webdav_url = f"{self.url}/remote.php/dav/files/{username}/"
-        
+
         try:
             self.client = WebDAVClient(
                 base_url=self.webdav_url,
-                auth=(username, password)
+                auth=(username, password),
             )
             self._verify_connection()
         except Exception as e:
@@ -34,40 +32,38 @@ class NextcloudClient:
     def _verify_connection(self) -> None:
         """Verify WebDAV connection"""
         try:
-            self.client.mkdir(self.remote_path)
-            logger.info(f"✓ Nextcloud WebDAV verbunden: {self.webdav_url}")
-        except WebDAVException as e:
-            if '405' not in str(e):  # 405 means path already exists
-                logger.error(f"✗ WebDAV-Verbindung fehlgeschlagen: {e}")
-                raise
-            logger.info(f"✓ Nextcloud WebDAV verbunden")
+            # mkdir ist idempotent, löst aber einen Fehler aus, wenn der Ordner existiert –
+            # daher exist_ok=True verwenden.
+            self.client.mkdir(self.remote_path, exist_ok=True)
+            logger.info(f"✓ Nextcloud WebDAV verbunden: {self.webdav_url}{self.remote_path}")
+        except Exception as e:
+            logger.error(f"✗ WebDAV-Verbindung fehlgeschlagen: {e}")
+            raise
 
     async def upload_file(self, local_path: Path, filename: str) -> str:
         """Upload file to Nextcloud"""
-        try:
-            remote_file_path = f"{self.remote_path}/{filename}"
-            
-            # Ensure directory exists
-            remote_dir = '/'.join(remote_file_path.split('/')[:-1])
+        remote_file_path = f"{self.remote_path}/{filename}"
+        remote_file_path = remote_file_path.lstrip("/")
+
+        # Sicherstellen, dass das Zielverzeichnis existiert
+        remote_dir = "/".join(remote_file_path.split("/")[:-1])
+        if remote_dir:
             try:
-                self.client.mkdir(remote_dir)
-            except WebDAVException:
-                pass  # Directory might already exist
-            
-            # Upload file
-            with open(local_path, 'rb') as f:
-                self.client.upload_sync(remote_file_path, f)
-            
-            logger.debug(f"✓ Zu Nextcloud hochgeladen: {remote_file_path}")
-            return remote_file_path
-            
-        except WebDAVException as e:
-            logger.error(f"✗ Nextcloud Upload fehlgeschlagen: {e}")
-            raise
+                self.client.mkdir(remote_dir, exist_ok=True)
+            except Exception:
+                # Wenn der Ordner schon existiert, ignorieren wir den Fehler
+                pass
+
+        # Upload durchführen
+        with open(local_path, "rb") as f:
+            self.client.upload_fileobj(remote_file_path, f)
+
+        logger.debug(f"✓ Zu Nextcloud hochgeladen: {remote_file_path}")
+        return remote_file_path
 
     async def file_exists(self, remote_path: str) -> bool:
         """Check if file exists in Nextcloud"""
         try:
             return self.client.exists(remote_path)
-        except WebDAVException:
+        except Exception:
             return False
