@@ -1,187 +1,162 @@
-"""SQLite database for tracking downloaded files."""
-import logging
+"""SQLite Database for download manifest and deduplication"""
 import sqlite3
+import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
-import hashlib
+from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 
 class ManifestDB:
-    """SQLite manifest database for file tracking."""
+    """SQLite Manifest Database"""
 
     def __init__(self, db_path: Path):
-        """Initialize database."""
-        self.db_path = db_path
+        """Initialize database"""
+        self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.connection = None
+        self._connect()
 
-    def initialize(self):
-        """Create tables if they don't exist."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
+    def _connect(self) -> None:
+        """Connect to database"""
+        try:
+            self.connection = sqlite3.connect(str(self.db_path))
+            self.connection.row_factory = sqlite3.Row
+            logger.info(f"✓ Manifest DB verbunden: {self.db_path}")
+        except sqlite3.Error as e:
+            logger.error(f"✗ DB-Verbindung fehlgeschlagen: {e}")
+            raise
 
-            # Files table
+    def initialize(self) -> None:
+        """Initialize database schema"""
+        try:
+            cursor = self.connection.cursor()
+            
+            # Downloaded files table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS files (
-                    id TEXT PRIMARY KEY,
-                    filename TEXT NOT NULL,
-                    file_path TEXT NOT NULL,
-                    size INTEGER,
-                    mimetype TEXT,
-                    checksum TEXT,
-                    channel_id TEXT,
-                    channel_name TEXT,
-                    sender_id TEXT,
-                    sender_name TEXT,
-                    message_id TEXT,
-                    downloaded_at TIMESTAMP,
-                    created_at TIMESTAMP
-                )
-            ''')
-
-            # Index for faster queries
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_id ON files(id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_checksum ON files(checksum)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_channel ON files(channel_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sender ON files(sender_id)')
-
-            # Errors table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS errors (
+                CREATE TABLE IF NOT EXISTS downloaded_files (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    file_id TEXT,
-                    error_message TEXT,
-                    error_type TEXT,
-                    attempt INTEGER,
-                    timestamp TIMESTAMP
+                    file_id TEXT UNIQUE NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    file_hash TEXT,
+                    file_size INTEGER,
+                    mime_type TEXT,
+                    sender TEXT,
+                    local_path TEXT,
+                    nextcloud_path TEXT,
+                    download_timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT DEFAULT 'completed'
                 )
             ''')
-
-            conn.commit()
-            logger.info("✓ Datenbank initialisiert")
+            
+            # Error log table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS download_errors (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_id TEXT NOT NULL,
+                    error_message TEXT,
+                    retry_count INTEGER DEFAULT 0,
+                    last_attempt DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (file_id) REFERENCES downloaded_files(file_id)
+                )
+            ''')
+            
+            # Channels metadata table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS channels (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel_id TEXT UNIQUE NOT NULL,
+                    channel_name TEXT,
+                    last_sync DATETIME,
+                    file_count INTEGER DEFAULT 0
+                )
+            ''')
+            
+            # Create indexes
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_hash ON downloaded_files(file_hash)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_channel_id ON downloaded_files(channel_id)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sender ON downloaded_files(sender)')
+            
+            self.connection.commit()
+            logger.info("✓ Manifest DB Schema initialisiert")
+            
+        except sqlite3.Error as e:
+            logger.error(f"✗ DB-Initialisierung fehlgeschlagen: {e}")
+            raise
 
     def file_exists(self, file_id: str) -> bool:
-        """Check if file is already downloaded."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT 1 FROM files WHERE id = ?', (file_id,))
-            return cursor.fetchone() is not None
-
-    def checksum_exists(self, checksum: str) -> bool:
-        """Check if file with same checksum was already downloaded."""
-        if not checksum:
-            return False
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT 1 FROM files WHERE checksum = ?', (checksum,))
-            return cursor.fetchone() is not None
-
-    def add_file(
-        self,
-        file_id: str,
-        filename: str,
-        file_path: str,
-        size: int,
-        mimetype: str,
-        channel_id: str,
-        channel_name: str,
-        sender_id: Optional[str] = None,
-        sender_name: Optional[str] = None,
-        message_id: Optional[str] = None,
-        checksum: Optional[str] = None
-    ) -> bool:
-        """Add file to manifest."""
+        """Check if file already downloaded"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT OR REPLACE INTO files (
-                        id, filename, file_path, size, mimetype, checksum,
-                        channel_id, channel_name, sender_id, sender_name,
-                        message_id, downloaded_at, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    file_id, filename, file_path, size, mimetype, checksum,
-                    channel_id, channel_name, sender_id, sender_name,
-                    message_id, datetime.now().isoformat(), datetime.now().isoformat()
-                ))
-                conn.commit()
-                return True
-        except Exception as e:
-            logger.error(f"Fehler beim Hinzufügen zu Manifest: {e}")
+            cursor = self.connection.cursor()
+            cursor.execute('SELECT 1 FROM downloaded_files WHERE file_id = ?', (file_id,))
+            return cursor.fetchone() is not None
+        except sqlite3.Error as e:
+            logger.error(f"✗ DB-Abfrage fehlgeschlagen: {e}")
             return False
 
-    def add_error(self, file_id: str, error_message: str, error_type: str = 'download', attempt: int = 1):
-        """Log download error."""
+    def insert_file(self, file_id: str, channel_id: str, message_id: str, 
+                   filename: str, file_hash: Optional[str], file_size: int,
+                   mime_type: str, sender: str, local_path: Optional[str] = None,
+                   nextcloud_path: Optional[str] = None) -> None:
+        """Insert downloaded file record"""
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO errors (file_id, error_message, error_type, attempt, timestamp)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (file_id, error_message, error_type, attempt, datetime.now().isoformat()))
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Fehler beim Protokollieren von Fehler: {e}")
-
-    def get_statistics(self) -> Dict:
-        """Get download statistics."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-
-            # Total files and size
-            cursor.execute('SELECT COUNT(*), SUM(size) FROM files')
-            total_files, total_size = cursor.fetchone()
-            total_size = total_size or 0
-
-            # Channels
-            cursor.execute('SELECT COUNT(DISTINCT channel_id) FROM files')
-            channels = cursor.fetchone()[0]
-
-            # Senders
-            cursor.execute('SELECT COUNT(DISTINCT sender_id) FROM files')
-            senders = cursor.fetchone()[0]
-
-            # Errors
-            cursor.execute('SELECT COUNT(DISTINCT file_id) FROM errors')
-            errors = cursor.fetchone()[0]
-
-            return {
-                'total_files': total_files or 0,
-                'total_size': total_size,
-                'channels': channels,
-                'senders': senders,
-                'errors': errors
-            }
-
-    def get_files_by_channel(self) -> Dict[str, int]:
-        """Get file count by channel."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
+            cursor = self.connection.cursor()
             cursor.execute('''
-                SELECT channel_id, COUNT(*) FROM files
-                GROUP BY channel_id
-                ORDER BY COUNT(*) DESC
-            ''')
-            return {row[0]: row[1] for row in cursor.fetchall()}
+                INSERT INTO downloaded_files 
+                (file_id, channel_id, message_id, filename, file_hash, file_size, 
+                 mime_type, sender, local_path, nextcloud_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (file_id, channel_id, message_id, filename, file_hash, file_size,
+                   mime_type, sender, local_path, nextcloud_path))
+            self.connection.commit()
+        except sqlite3.Error as e:
+            logger.error(f"✗ Datensatz-Insert fehlgeschlagen: {e}")
+            raise
 
-    def get_files_by_sender(self, channel_id: Optional[str] = None) -> Dict[str, int]:
-        """Get file count by sender."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            if channel_id:
-                cursor.execute('''
-                    SELECT sender_name, COUNT(*) FROM files
-                    WHERE channel_id = ?
-                    GROUP BY sender_name
-                    ORDER BY COUNT(*) DESC
-                ''', (channel_id,))
-            else:
-                cursor.execute('''
-                    SELECT sender_name, COUNT(*) FROM files
-                    GROUP BY sender_name
-                    ORDER BY COUNT(*) DESC
-                ''')
-            return {row[0]: row[1] for row in cursor.fetchall()}
+    def record_error(self, file_id: str, error_message: str) -> None:
+        """Record download error"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                INSERT INTO download_errors (file_id, error_message, retry_count)
+                VALUES (?, ?, 1)
+            ''', (file_id, error_message))
+            self.connection.commit()
+        except sqlite3.Error as e:
+            logger.error(f"✗ Fehlerprotokoll-Insert fehlgeschlagen: {e}")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get database statistics"""
+        try:
+            cursor = self.connection.cursor()
+            
+            cursor.execute('SELECT COUNT(*) as count, SUM(file_size) as total_size FROM downloaded_files')
+            row = cursor.fetchone()
+            
+            return {
+                'total_files': row['count'] or 0,
+                'total_size': row['total_size'] or 0,
+                'total_errors': self._count_errors()
+            }
+        except sqlite3.Error as e:
+            logger.error(f"✗ Statistik-Abfrage fehlgeschlagen: {e}")
+            return {'total_files': 0, 'total_size': 0, 'total_errors': 0}
+
+    def _count_errors(self) -> int:
+        """Count total errors"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('SELECT COUNT(*) as count FROM download_errors')
+            row = cursor.fetchone()
+            return row['count'] or 0
+        except sqlite3.Error:
+            return 0
+
+    def close(self) -> None:
+        """Close database connection"""
+        if self.connection:
+            self.connection.close()
+            logger.info("DB-Verbindung geschlossen")
