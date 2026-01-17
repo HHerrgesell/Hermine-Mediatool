@@ -119,18 +119,28 @@ class HermineClient:
 
             private_key = data.get("private_key", "")
 
-            # Check if key is empty and log response size
-            if not private_key or private_key.strip() == "":
-                logger.error("Private key is empty!")
-                logger.debug(f"Full response data keys: {data.keys()}")
-                # Try alternative field names
-                for key_name in ["privateKey", "key", "rsa_key", "encrypted_private_key"]:
-                    if key_name in data:
-                        logger.debug(f"Found alternative key field: {key_name}")
-                        private_key = data.get(key_name, "")
-                        break
+            # Check if we have a 'keys' field (API returns this instead)
+            if not private_key and "keys" in data:
+                logger.debug("Found 'keys' field in response")
+                keys = data.get("keys")
+                logger.debug(f"Keys type: {type(keys)}, content: {keys if isinstance(keys, (dict, list)) else 'non-dict/list'}")
 
-            if not private_key:
+                # If keys is a dict, look for private_key inside
+                if isinstance(keys, dict):
+                    private_key = keys.get("private_key", "") or keys.get("privateKey", "") or keys.get("key", "")
+                    logger.debug(f"Extracted key from dict, length: {len(private_key)}")
+                # If keys is a list, take first item's private_key
+                elif isinstance(keys, list) and len(keys) > 0:
+                    logger.debug(f"Keys is a list with {len(keys)} items")
+                    first_key = keys[0]
+                    if isinstance(first_key, dict):
+                        private_key = first_key.get("private_key", "") or first_key.get("privateKey", "") or first_key.get("key", "")
+                        logger.debug(f"Extracted key from first list item, length: {len(private_key)}")
+
+            # Check if key is still empty
+            if not private_key or private_key.strip() == "":
+                logger.error("Private key is empty after checking all fields!")
+                logger.debug(f"Full response: {data}")
                 raise ValueError("No private key found in API response. User may need to generate keys in the app first.")
 
             # Log key format for debugging
