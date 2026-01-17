@@ -208,15 +208,15 @@ class HermineClient:
     async def download_file(self, url: str, timeout: int = None) -> bytes:
         """Download a file from URL"""
         try:
-            # Add authentication parameters to download
-            params = {
+            # Use POST with form data for authentication (matching API pattern)
+            data = {
                 "device_id": self.device_id,
                 "client_key": self.client_key
             }
 
-            response = self.session.get(
+            response = self.session.post(
                 url,
-                params=params,
+                data=data,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
