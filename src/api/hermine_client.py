@@ -397,7 +397,7 @@ class HermineClient:
             raise
 
     def _download_full_file_from_endpoint(self, media_file: MediaFile, timeout: int = None) -> Optional[bytes]:
-        """Attempt to download full file from /file/download endpoint
+        """Attempt to download full file using direct URL (like browser ServiceWorker)
 
         Args:
             media_file: MediaFile object with encryption info
@@ -407,66 +407,70 @@ class HermineClient:
             Decrypted full file bytes, or None if download fails
         """
         try:
-            logger.debug(f"Attempting full file download via /file/download for {media_file.file_id}")
+            # Construct direct download URL (same pattern as browser)
+            # Pattern: https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}
+            download_url = f"https://app.thw-messenger.de/thw/app.thw-messenger.de/{media_file.file_id}/{media_file.filename}"
 
-            # Try POST with file_id parameter
+            logger.debug(f"Attempting full file download from direct URL: {download_url}")
+
+            # Try direct URL download with authenticated session
             try:
-                data = self._post("file/download", {"file_id": media_file.file_id})
+                response = self.session.get(
+                    download_url,
+                    timeout=timeout or self.timeout,
+                    verify=self.verify_ssl,
+                    headers={
+                        "Referer": "https://app.thw-messenger.de/thw/app",
+                    }
+                )
 
-                # Check if response contains file data
-                if "data" in data:
-                    encrypted_data = bytes.fromhex(data["data"])
-                    logger.debug(f"Downloaded {len(encrypted_data)} bytes via /file/download (data field)")
-                elif "base_64" in data:
-                    encrypted_data = bytes.fromhex(data["base_64"])
-                    logger.debug(f"Downloaded {len(encrypted_data)} bytes via /file/download (base_64 field)")
-                elif "file" in data:
-                    encrypted_data = bytes.fromhex(data["file"])
-                    logger.debug(f"Downloaded {len(encrypted_data)} bytes via /file/download (file field)")
+                # Check response
+                if response.status_code == 200:
+                    encrypted_data = response.content
+                    logger.debug(f"✓ Downloaded {len(encrypted_data)} bytes from direct URL")
+
+                    # Decrypt the downloaded data if encrypted
+                    if media_file.encrypted and media_file.file_key and media_file.file_iv:
+                        from ..crypto import HermineCrypto
+                        from ..config import Config
+                        from Crypto.Cipher import AES
+                        from Crypto.Util.Padding import unpad
+
+                        config = Config()
+                        crypto = HermineCrypto(
+                            private_key_pem=self._get_private_key(),
+                            encryption_password=config.hermine.encryption_key
+                        )
+
+                        # Decrypt chat key
+                        decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
+
+                        # Decrypt file key
+                        encrypted_file_key = bytes.fromhex(media_file.file_key)
+                        file_key_iv = bytes.fromhex(media_file.file_iv)
+                        cipher = AES.new(decrypted_chat_key, AES.MODE_CBC, iv=file_key_iv)
+                        padded_file_key = cipher.decrypt(encrypted_file_key)
+                        file_key_bytes = unpad(padded_file_key, AES.block_size)
+
+                        # Decrypt file data
+                        file_data_iv = bytes.fromhex(media_file.e2e_iv)
+                        decrypted_data = crypto.decrypt_file(
+                            encrypted_data,
+                            file_key_bytes,
+                            file_data_iv
+                        )
+
+                        logger.info(f"✓ Downloaded and decrypted full file: {len(encrypted_data)} → {len(decrypted_data)} bytes")
+                        return decrypted_data
+                    else:
+                        logger.debug("File not encrypted, returning as-is")
+                        return encrypted_data
                 else:
-                    logger.debug(f"Response fields: {list(data.keys())}")
-                    logger.warning("No file data found in /file/download response")
+                    logger.debug(f"Direct URL download failed with status {response.status_code}")
                     return None
 
-                # Decrypt the downloaded data if encrypted
-                if media_file.encrypted and media_file.file_key and media_file.file_iv:
-                    from ..crypto import HermineCrypto
-                    from ..config import Config
-                    from Crypto.Cipher import AES
-                    from Crypto.Util.Padding import unpad
-
-                    config = Config()
-                    crypto = HermineCrypto(
-                        private_key_pem=self._get_private_key(),
-                        encryption_password=config.hermine.encryption_key
-                    )
-
-                    # Decrypt chat key
-                    decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
-
-                    # Decrypt file key
-                    encrypted_file_key = bytes.fromhex(media_file.file_key)
-                    file_key_iv = bytes.fromhex(media_file.file_iv)
-                    cipher = AES.new(decrypted_chat_key, AES.MODE_CBC, iv=file_key_iv)
-                    padded_file_key = cipher.decrypt(encrypted_file_key)
-                    file_key_bytes = unpad(padded_file_key, AES.block_size)
-
-                    # Decrypt file data
-                    file_data_iv = bytes.fromhex(media_file.e2e_iv)
-                    decrypted_data = crypto.decrypt_file(
-                        encrypted_data,
-                        file_key_bytes,
-                        file_data_iv
-                    )
-
-                    logger.info(f"✓ Downloaded and decrypted full file: {len(encrypted_data)} → {len(decrypted_data)} bytes")
-                    return decrypted_data
-                else:
-                    logger.debug("File not encrypted, returning as-is")
-                    return encrypted_data
-
             except Exception as e:
-                logger.debug(f"Failed to download via /file/download endpoint: {e}")
+                logger.debug(f"Failed to download from direct URL: {e}")
                 return None
 
         except Exception as e:
