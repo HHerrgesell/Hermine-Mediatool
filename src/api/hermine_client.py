@@ -24,6 +24,11 @@ class MediaFile:
     sender_name: str
     download_url: str
     timestamp: str
+    encrypted: bool = False
+    e2e_iv: str = ""
+    file_key: str = ""
+    file_iv: str = ""
+    chat_key: str = ""
 
 
 class HermineClient:
@@ -45,6 +50,7 @@ class HermineClient:
         self.client_key = None
         self.user_id = None
         self.hidden_id = None
+        self._private_key_cache = None
 
         # Set headers matching reference implementation
         self.session.headers.update({
@@ -97,6 +103,20 @@ class HermineClient:
 
         except (RequestException, ValueError) as e:
             logger.error(f"✗ Authentifizierung fehlgeschlagen: {e}")
+            raise
+
+    def _get_private_key(self) -> str:
+        """Get user's private RSA key from API (cached)"""
+        if self._private_key_cache:
+            return self._private_key_cache
+
+        try:
+            data = self._post("security/get_private_key", {})
+            self._private_key_cache = data.get("private_key", "")
+            logger.debug("✓ Private key retrieved from API")
+            return self._private_key_cache
+        except (RequestException, ValueError) as e:
+            logger.error(f"✗ Failed to get private key: {e}")
             raise
 
     def get_companies(self) -> List[Dict[str, Any]]:
@@ -187,6 +207,21 @@ class HermineClient:
                                 # Get file size in bytes
                                 file_size = int(file_info.get("size_byte", 0))
 
+                                # Extract encryption information
+                                encrypted = file_info.get("encrypted", False)
+                                e2e_iv = file_info.get("e2e_iv", "")
+
+                                # Get file-specific encryption keys
+                                file_key = ""
+                                file_iv = ""
+                                chat_key = ""
+                                keys = file_info.get("keys", [])
+                                if keys and len(keys) > 0:
+                                    key_info = keys[0]  # Use first key (should be for this channel)
+                                    file_key = key_info.get("key", "")
+                                    file_iv = key_info.get("iv", "")
+                                    chat_key = key_info.get("chat_key", "")
+
                                 media_files.append(MediaFile(
                                     file_id=str(file_id),
                                     filename=file_info.get("name", ""),
@@ -197,7 +232,12 @@ class HermineClient:
                                     sender_id=str(sender.get("id", "")),
                                     sender_name=sender_name,
                                     download_url=download_url,
-                                    timestamp=str(msg.get("time", ""))
+                                    timestamp=str(msg.get("time", "")),
+                                    encrypted=encrypted,
+                                    e2e_iv=e2e_iv,
+                                    file_key=file_key,
+                                    file_iv=file_iv,
+                                    chat_key=chat_key
                                 ))
                             else:
                                 logger.debug(f"Skipping non-media file: {mime_type}")
@@ -212,32 +252,107 @@ class HermineClient:
             logger.error(f"✗ Fehler beim Abrufen von Mediadateien: {e}")
             raise
 
-    async def download_file(self, url: str, timeout: int = None) -> bytes:
-        """Download a file from app.thw-messenger.de using simple GET request"""
-        try:
-            logger.debug(f"Downloading file from: {url}")
+    async def download_file(self, media_file: MediaFile, timeout: int = None) -> bytes:
+        """Download and decrypt a file using POST with authentication
 
-            # Files are hosted on app.thw-messenger.de and accessed via simple GET
-            # No authentication needed - browser uses these headers
-            headers = {
-                'Referer': 'https://app.thw-messenger.de/thw/app',
-                'User-Agent': self.session.headers.get('User-Agent'),
+        Files are encrypted end-to-end and must be downloaded via POST request
+        with authentication, then decrypted using the file's encryption keys.
+        """
+        try:
+            logger.debug(f"Downloading file ID: {media_file.file_id}")
+
+            # Download encrypted file data via POST with authentication
+            data = {
+                "device_id": self.device_id,
+                "client_key": self.client_key,
+                "id": media_file.file_id
             }
 
-            response = self.session.get(
-                url,
-                headers=headers,
+            response = self.session.post(
+                f"{self.base_url}/file/download",
+                data=data,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
             )
             response.raise_for_status()
 
-            content = response.content
-            logger.debug(f"Downloaded {len(content)} bytes")
-            return content
+            # Check for JSON error response
+            content_type = response.headers.get('content-type', '')
+            if 'application/json' in content_type:
+                import json
+                error_data = response.json()
+                error_msg = error_data.get('status', {}).get('message', 'Unknown error')
+                raise ValueError(f"API error: {error_msg}")
+
+            encrypted_data = response.content
+            logger.debug(f"Downloaded {len(encrypted_data)} bytes (encrypted)")
+
+            # Decrypt if file is encrypted
+            if media_file.encrypted and media_file.file_key and media_file.file_iv:
+                try:
+                    # Import crypto here to avoid circular imports
+                    from ..crypto import HermineCrypto
+                    from ..config import Config
+
+                    # Get encryption password from config
+                    config = Config()
+                    crypto = HermineCrypto(
+                        private_key_pem=self._get_private_key(),
+                        encryption_password=config.hermine.encryption_key
+                    )
+
+                    # Decrypt the chat key first (it's RSA-encrypted and base64-encoded)
+                    logger.debug(f"Decrypting chat_key (length: {len(media_file.chat_key)})")
+                    decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
+                    logger.debug(f"Chat key decrypted: {len(decrypted_chat_key)} bytes")
+
+                    # The file_key might be hex-encoded AES key (possibly encrypted with chat_key)
+                    # Try to use it directly first as hex
+                    file_key_hex = media_file.file_key
+                    file_iv_hex = media_file.file_iv
+
+                    # If key is 96 hex chars (48 bytes), it might be key+IV or needs further decryption
+                    if len(file_key_hex) == 96:
+                        # Might be 32-byte key + 16-byte IV concatenated, or encrypted
+                        logger.debug(f"File key is 48 bytes, might need decryption with chat_key")
+                        # For now, try using first 64 chars (32 bytes) as key
+                        file_key_bytes = bytes.fromhex(file_key_hex[:64])
+                    elif len(file_key_hex) == 64:
+                        # Standard 32-byte AES-256 key
+                        file_key_bytes = bytes.fromhex(file_key_hex)
+                    else:
+                        logger.warning(f"Unexpected file_key length: {len(file_key_hex)} hex chars")
+                        file_key_bytes = bytes.fromhex(file_key_hex)
+
+                    file_iv_bytes = bytes.fromhex(file_iv_hex)
+                    logger.debug(f"Using file key: {len(file_key_bytes)} bytes, IV: {len(file_iv_bytes)} bytes")
+
+                    # Decrypt the file data
+                    decrypted_data = crypto.decrypt_file(
+                        encrypted_data,
+                        file_key_bytes,
+                        file_iv_bytes
+                    )
+
+                    logger.info(f"✓ Decrypted file: {len(encrypted_data)} → {len(decrypted_data)} bytes")
+                    return decrypted_data
+
+                except Exception as e:
+                    logger.error(f"✗ Decryption failed: {e}")
+                    logger.debug(f"File key length: {len(media_file.file_key)}, IV length: {len(media_file.file_iv)}")
+                    logger.debug(f"Encrypted data length: {len(encrypted_data)}")
+                    raise
+            else:
+                # File is not encrypted, return as-is
+                logger.debug(f"File is not encrypted, returning {len(encrypted_data)} bytes")
+                return encrypted_data
+
         except RequestException as e:
             logger.error(f"✗ Download fehlgeschlagen: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"✗ Decryption failed: {e}")
             raise
 
     @staticmethod
