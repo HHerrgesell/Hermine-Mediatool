@@ -169,21 +169,17 @@ class HermineClient:
                             mime_type = file_info.get("mime", "")
                             logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Check if file has a URL field, otherwise use ID
+                                # Construct download URL using app.thw-messenger.de
+                                # Pattern: https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}
                                 file_id = file_info.get("id")
-                                file_url = file_info.get("url") or file_info.get("download_url")
+                                filename = file_info.get("name", "")
 
-                                # Debug: log all available fields
-                                logger.debug(f"File fields: {list(file_info.keys())}")
-                                logger.debug(f"File ID: {file_id}, URL field: {file_url}")
+                                # Files are hosted on app subdomain, not api subdomain
+                                app_base = self.base_url.replace("api.thw-messenger.de", "app.thw-messenger.de")
+                                download_url = f"{app_base}/thw/app.thw-messenger.de/{file_id}/{filename}"
 
-                                if file_url:
-                                    download_url = file_url
-                                    logger.debug(f"Using URL from API: {file_url}")
-                                else:
-                                    # Construct URL from file ID
-                                    download_url = f"{self.base_url}/file/download/{file_id}"
-                                    logger.debug(f"Constructed URL: {download_url}")
+                                logger.debug(f"File ID: {file_id}, filename: {filename}")
+                                logger.debug(f"Download URL: {download_url}")
 
                                 # Get sender info from sender object
                                 sender = msg.get("sender", {})
