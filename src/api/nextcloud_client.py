@@ -1,4 +1,5 @@
 """Nextcloud WebDAV Client"""
+import asyncio
 import logging
 from pathlib import Path
 from webdav4.client import Client as WebDAVClient
@@ -50,13 +51,16 @@ class NextcloudClient:
         if remote_dir:
             try:
                 self.client.mkdir(remote_dir, exist_ok=True)
-            except Exception:
+            except Exception as e:
                 # Wenn der Ordner schon existiert, ignorieren wir den Fehler
-                pass
+                logger.debug(f"Could not create directory {remote_dir}: {e}")
 
-        # Upload durchführen
-        with open(local_path, "rb") as f:
-            self.client.upload_fileobj(remote_file_path, f)
+        # Upload durchführen (run blocking I/O in thread pool to avoid blocking event loop)
+        def _upload_file_sync():
+            with open(local_path, "rb") as f:
+                self.client.upload_fileobj(remote_file_path, f)
+
+        await asyncio.to_thread(_upload_file_sync)
 
         logger.debug(f"✓ Zu Nextcloud hochgeladen: {remote_file_path}")
         return remote_file_path
