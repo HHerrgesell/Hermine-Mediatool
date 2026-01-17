@@ -262,10 +262,11 @@ class HermineClient:
             logger.debug(f"Downloading file ID: {media_file.file_id}")
 
             # Download encrypted file data via POST with authentication
+            # API accepts either "file_id" or "url" parameter
             data = {
                 "device_id": self.device_id,
                 "client_key": self.client_key,
-                "id": media_file.file_id
+                "file_id": media_file.file_id
             }
 
             response = self.session.post(
