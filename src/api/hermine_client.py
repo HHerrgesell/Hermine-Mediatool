@@ -3,6 +3,9 @@ import logging
 import asyncio
 import random
 import string
+import json
+from pathlib import Path
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import requests
@@ -35,6 +38,10 @@ class MediaFile:
 class HermineClient:
     """Hermine/Stashcat API Client"""
 
+    # Session cache settings
+    SESSION_CACHE_FILE = Path(".hermine_session.json")
+    SESSION_CACHE_DAYS = 7
+
     def __init__(self, base_url: str, username: str, password: str,
                  timeout: int = 30, verify_ssl: bool = True):
         """Initialize Hermine client"""
@@ -45,12 +52,25 @@ class HermineClient:
         self.verify_ssl = verify_ssl
         self.session = requests.Session()
 
-        # Generate device ID
-        self.device_id = "".join(random.choice(string.ascii_letters + string.digits)
-                                for _ in range(32))
-        self.client_key = None
-        self.user_id = None
-        self.hidden_id = None
+        # Try to load cached session
+        cached_session = self._load_session_cache()
+
+        if cached_session:
+            # Use cached device_id and client_key
+            self.device_id = cached_session["device_id"]
+            self.client_key = cached_session["client_key"]
+            self.user_id = cached_session.get("user_id")
+            self.hidden_id = cached_session.get("hidden_id")
+            logger.info(f"✓ Using cached session (device_id: {self.device_id[:8]}...)")
+        else:
+            # Generate new device ID
+            self.device_id = "".join(random.choice(string.ascii_letters + string.digits)
+                                    for _ in range(32))
+            self.client_key = None
+            self.user_id = None
+            self.hidden_id = None
+            logger.info(f"✓ Generated new device_id: {self.device_id[:8]}...")
+
         self._private_key_cache = None
 
         # Set headers matching reference implementation
@@ -64,7 +84,67 @@ class HermineClient:
                           "KHTML, like Gecko) Chrome/97.0.4692.99 Mobile Safari/537.36",
         })
 
-        self._authenticate()
+        # Authenticate (will use cached session or create new one)
+        if not cached_session:
+            self._authenticate()
+        else:
+            # Verify cached session is still valid
+            try:
+                # Test with a simple API call
+                self.get_companies()
+                logger.info("✓ Cached session is still valid")
+            except Exception as e:
+                logger.warning(f"Cached session invalid: {e}, re-authenticating...")
+                self.client_key = None
+                self._authenticate()
+
+    def _load_session_cache(self) -> Optional[Dict[str, Any]]:
+        """Load cached session from file if valid"""
+        try:
+            if not self.SESSION_CACHE_FILE.exists():
+                return None
+
+            with open(self.SESSION_CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+
+            # Check expiration
+            expires_at = datetime.fromisoformat(cache.get("expires_at", ""))
+            if datetime.now() >= expires_at:
+                logger.debug("Session cache expired")
+                self.SESSION_CACHE_FILE.unlink(missing_ok=True)
+                return None
+
+            # Check username matches
+            if cache.get("username") != self.username:
+                logger.debug("Session cache username mismatch")
+                return None
+
+            logger.debug(f"Loaded session cache (expires: {expires_at.strftime('%Y-%m-%d %H:%M')})")
+            return cache
+
+        except Exception as e:
+            logger.debug(f"Failed to load session cache: {e}")
+            return None
+
+    def _save_session_cache(self) -> None:
+        """Save session to cache file"""
+        try:
+            cache = {
+                "device_id": self.device_id,
+                "client_key": self.client_key,
+                "user_id": self.user_id,
+                "hidden_id": self.hidden_id,
+                "username": self.username,
+                "expires_at": (datetime.now() + timedelta(days=self.SESSION_CACHE_DAYS)).isoformat()
+            }
+
+            with open(self.SESSION_CACHE_FILE, 'w') as f:
+                json.dump(cache, f, indent=2)
+
+            logger.debug(f"Saved session cache (valid for {self.SESSION_CACHE_DAYS} days)")
+
+        except Exception as e:
+            logger.warning(f"Failed to save session cache: {e}")
 
     def _post(self, url: str, data: Dict[str, Any], include_auth: bool = True) -> Dict[str, Any]:
         """Make POST request to API"""
@@ -101,6 +181,9 @@ class HermineClient:
             self.hidden_id = data["userinfo"]["socket_id"]
 
             logger.info(f"✓ Authentifiziert als {self.username}")
+
+            # Save session to cache
+            self._save_session_cache()
 
         except (RequestException, ValueError) as e:
             logger.error(f"✗ Authentifizierung fehlgeschlagen: {e}")
@@ -313,22 +396,111 @@ class HermineClient:
             logger.error(f"✗ Fehler beim Abrufen von Mediadateien: {e}")
             raise
 
-    async def download_file(self, media_file: MediaFile, timeout: int = None) -> bytes:
-        """Decrypt file data from base64-encoded embedded data
+    def _download_full_file_from_endpoint(self, media_file: MediaFile, timeout: int = None) -> Optional[bytes]:
+        """Attempt to download full file from /file/download endpoint
 
-        Files are embedded in the message/content response as base64-encoded
-        encrypted data. No separate download is needed.
+        Args:
+            media_file: MediaFile object with encryption info
+            timeout: Optional timeout override
+
+        Returns:
+            Decrypted full file bytes, or None if download fails
+        """
+        try:
+            logger.debug(f"Attempting full file download via /file/download for {media_file.file_id}")
+
+            # Try POST with file_id parameter
+            try:
+                data = self._post("file/download", {"file_id": media_file.file_id})
+
+                # Check if response contains file data
+                if "data" in data:
+                    encrypted_data = bytes.fromhex(data["data"])
+                    logger.debug(f"Downloaded {len(encrypted_data)} bytes via /file/download (data field)")
+                elif "base_64" in data:
+                    encrypted_data = bytes.fromhex(data["base_64"])
+                    logger.debug(f"Downloaded {len(encrypted_data)} bytes via /file/download (base_64 field)")
+                elif "file" in data:
+                    encrypted_data = bytes.fromhex(data["file"])
+                    logger.debug(f"Downloaded {len(encrypted_data)} bytes via /file/download (file field)")
+                else:
+                    logger.debug(f"Response fields: {list(data.keys())}")
+                    logger.warning("No file data found in /file/download response")
+                    return None
+
+                # Decrypt the downloaded data if encrypted
+                if media_file.encrypted and media_file.file_key and media_file.file_iv:
+                    from ..crypto import HermineCrypto
+                    from ..config import Config
+                    from Crypto.Cipher import AES
+                    from Crypto.Util.Padding import unpad
+
+                    config = Config()
+                    crypto = HermineCrypto(
+                        private_key_pem=self._get_private_key(),
+                        encryption_password=config.hermine.encryption_key
+                    )
+
+                    # Decrypt chat key
+                    decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
+
+                    # Decrypt file key
+                    encrypted_file_key = bytes.fromhex(media_file.file_key)
+                    file_key_iv = bytes.fromhex(media_file.file_iv)
+                    cipher = AES.new(decrypted_chat_key, AES.MODE_CBC, iv=file_key_iv)
+                    padded_file_key = cipher.decrypt(encrypted_file_key)
+                    file_key_bytes = unpad(padded_file_key, AES.block_size)
+
+                    # Decrypt file data
+                    file_data_iv = bytes.fromhex(media_file.e2e_iv)
+                    decrypted_data = crypto.decrypt_file(
+                        encrypted_data,
+                        file_key_bytes,
+                        file_data_iv
+                    )
+
+                    logger.info(f"✓ Downloaded and decrypted full file: {len(encrypted_data)} → {len(decrypted_data)} bytes")
+                    return decrypted_data
+                else:
+                    logger.debug("File not encrypted, returning as-is")
+                    return encrypted_data
+
+            except Exception as e:
+                logger.debug(f"Failed to download via /file/download endpoint: {e}")
+                return None
+
+        except Exception as e:
+            logger.debug(f"Full file download failed: {e}")
+            return None
+
+    async def download_file(self, media_file: MediaFile, timeout: int = None, prefer_full: bool = True) -> bytes:
+        """Download and decrypt file data
+
+        Args:
+            media_file: MediaFile object with encryption info
+            timeout: Optional timeout override
+            prefer_full: If True, try to download full file from endpoint first, fallback to embedded thumbnail
+
+        Returns:
+            Decrypted file bytes
         """
         try:
             logger.debug(f"Processing file ID: {media_file.file_id}")
 
-            # File data is already embedded in the message response as base64
+            # Try to download full file first if requested
+            if prefer_full:
+                full_file_data = self._download_full_file_from_endpoint(media_file, timeout)
+                if full_file_data:
+                    return full_file_data
+                logger.debug("Full file download failed or not available, using embedded thumbnail data")
+
+            # Fallback: Use embedded thumbnail data
             if not media_file.base_64_data:
                 raise ValueError(f"No base64 data found for file {media_file.file_id}")
 
             # Decode from hex string to bytes (it's hex-encoded, not base64!)
             encrypted_data = bytes.fromhex(media_file.base_64_data)
-            logger.debug(f"Decoded {len(encrypted_data)} bytes from hex (encrypted)")
+            logger.debug(f"Decoded {len(encrypted_data)} bytes from hex (encrypted thumbnail)")
 
             # Decrypt if file is encrypted
             if media_file.encrypted and media_file.file_key and media_file.file_iv:
@@ -383,7 +555,7 @@ class HermineClient:
                         file_data_iv
                     )
 
-                    logger.info(f"✓ Decrypted file: {len(encrypted_data)} → {len(decrypted_data)} bytes")
+                    logger.info(f"✓ Decrypted file (thumbnail): {len(encrypted_data)} → {len(decrypted_data)} bytes")
                     return decrypted_data
 
                 except Exception as e:
@@ -402,6 +574,183 @@ class HermineClient:
         except Exception as e:
             logger.error(f"✗ Decryption failed: {e}")
             raise
+
+    def debug_dump_file_response(self, channel_id: str, limit: int = 1) -> Dict[str, Any]:
+        """Debug method: Dump full API response for files in a channel
+
+        Args:
+            channel_id: Channel ID to fetch messages from
+            limit: Number of messages to fetch (default: 1)
+
+        Returns:
+            Full API response dict with all fields
+        """
+        try:
+            logger.info(f"=== DEBUG: Fetching message response for channel {channel_id} ===")
+
+            data = self._post("message/content", {
+                "channel_id": channel_id,
+                "source": "channel",
+                "limit": limit,
+                "offset": 0,
+            })
+
+            # Pretty print the response
+            logger.info("=== Full API Response ===")
+            logger.info(json.dumps(data, indent=2, ensure_ascii=False))
+
+            # Analyze file structure if present
+            messages = data.get("messages", [])
+            if messages:
+                for idx, msg in enumerate(messages):
+                    files = msg.get("files", [])
+                    if files:
+                        logger.info(f"\n=== Message {idx + 1} Files ===")
+                        for file_idx, file_info in enumerate(files):
+                            logger.info(f"\n--- File {file_idx + 1} ---")
+                            logger.info(f"  ID: {file_info.get('id')}")
+                            logger.info(f"  Name: {file_info.get('name')}")
+                            logger.info(f"  Mime: {file_info.get('mime')}")
+                            logger.info(f"  Size (bytes): {file_info.get('size_byte')}")
+                            logger.info(f"  Encrypted: {file_info.get('encrypted')}")
+                            logger.info(f"  E2E IV length: {len(file_info.get('e2e_iv', ''))}")
+
+                            keys = file_info.get('keys', [])
+                            if keys:
+                                logger.info(f"  Keys count: {len(keys)}")
+                                logger.info(f"  File key length: {len(keys[0].get('key', ''))}")
+                                logger.info(f"  File IV length: {len(keys[0].get('iv', ''))}")
+                                logger.info(f"  Chat key length: {len(keys[0].get('chat_key', ''))}")
+
+                            base64_data = file_info.get('base_64', '')
+                            logger.info(f"  Base64 data length: {len(base64_data)}")
+                            if base64_data:
+                                logger.info(f"  Base64 decoded size: {len(bytes.fromhex(base64_data))} bytes")
+
+                            logger.info(f"  All fields: {list(file_info.keys())}")
+
+            return data
+
+        except Exception as e:
+            logger.error(f"✗ Debug dump failed: {e}")
+            raise
+
+    def debug_test_file_download(self, file_id: str, file_name: str = "") -> Dict[str, Any]:
+        """Debug method: Test /file/download endpoint with various approaches
+
+        Args:
+            file_id: File ID to download
+            file_name: Optional filename
+
+        Returns:
+            Dict with test results
+        """
+        results = {
+            "file_id": file_id,
+            "file_name": file_name,
+            "tests": []
+        }
+
+        logger.info(f"\n=== DEBUG: Testing /file/download endpoint for file {file_id} ===")
+
+        # Test 1: POST with file_id
+        logger.info("\n--- Test 1: POST with file_id parameter ---")
+        try:
+            data = self._post("file/download", {"file_id": file_id})
+            logger.info(f"✓ Test 1 succeeded!")
+            logger.info(f"Response keys: {list(data.keys())}")
+            logger.info(f"Response: {json.dumps(data, indent=2)[:500]}...")
+            results["tests"].append({
+                "name": "POST with file_id",
+                "success": True,
+                "response": data
+            })
+        except Exception as e:
+            logger.warning(f"✗ Test 1 failed: {e}")
+            results["tests"].append({
+                "name": "POST with file_id",
+                "success": False,
+                "error": str(e)
+            })
+
+        # Test 2: POST with id parameter
+        logger.info("\n--- Test 2: POST with id parameter ---")
+        try:
+            data = self._post("file/download", {"id": file_id})
+            logger.info(f"✓ Test 2 succeeded!")
+            logger.info(f"Response: {json.dumps(data, indent=2)[:500]}...")
+            results["tests"].append({
+                "name": "POST with id",
+                "success": True,
+                "response": data
+            })
+        except Exception as e:
+            logger.warning(f"✗ Test 2 failed: {e}")
+            results["tests"].append({
+                "name": "POST with id",
+                "success": False,
+                "error": str(e)
+            })
+
+        # Test 3: Direct URL download
+        if file_name:
+            logger.info("\n--- Test 3: Direct URL download ---")
+            try:
+                url = f"https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{file_name}"
+                response = self.session.get(url, timeout=self.timeout, verify=self.verify_ssl)
+                logger.info(f"Status: {response.status_code}")
+                logger.info(f"Headers: {dict(response.headers)}")
+                logger.info(f"Content length: {len(response.content)} bytes")
+
+                if response.status_code == 200:
+                    logger.info(f"✓ Test 3 succeeded!")
+                    results["tests"].append({
+                        "name": "Direct URL download",
+                        "success": True,
+                        "status_code": response.status_code,
+                        "content_length": len(response.content)
+                    })
+                else:
+                    logger.warning(f"✗ Test 3 failed with status {response.status_code}")
+                    results["tests"].append({
+                        "name": "Direct URL download",
+                        "success": False,
+                        "status_code": response.status_code,
+                        "error": response.text[:200]
+                    })
+            except Exception as e:
+                logger.warning(f"✗ Test 3 failed: {e}")
+                results["tests"].append({
+                    "name": "Direct URL download",
+                    "success": False,
+                    "error": str(e)
+                })
+
+        # Test 4: Try file/get endpoint
+        logger.info("\n--- Test 4: POST to file/get endpoint ---")
+        try:
+            data = self._post("file/get", {"file_id": file_id})
+            logger.info(f"✓ Test 4 succeeded!")
+            logger.info(f"Response: {json.dumps(data, indent=2)[:500]}...")
+            results["tests"].append({
+                "name": "POST to file/get",
+                "success": True,
+                "response": data
+            })
+        except Exception as e:
+            logger.warning(f"✗ Test 4 failed: {e}")
+            results["tests"].append({
+                "name": "POST to file/get",
+                "success": False,
+                "error": str(e)
+            })
+
+        # Summary
+        logger.info("\n=== Test Summary ===")
+        success_count = sum(1 for t in results["tests"] if t["success"])
+        logger.info(f"Passed: {success_count}/{len(results['tests'])}")
+
+        return results
 
     @staticmethod
     def _is_media_file(mime_type: str) -> bool:

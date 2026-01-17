@@ -42,6 +42,9 @@ env/
 .env.local
 .env.*.local
 
+# Session cache
+.hermine_session.json
+
 # Logs
 hermine_downloader.log
 logs/
