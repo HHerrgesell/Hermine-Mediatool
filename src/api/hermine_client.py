@@ -145,32 +145,63 @@ class HermineClient:
 
                 messages = data.get("messages", [])
 
+                # Debug: log first message structure
+                if messages and offset == 0:
+                    logger.debug(f"First message structure: {messages[0].keys() if messages else 'no messages'}")
+                    if messages and len(messages) > 0:
+                        msg = messages[0]
+                        logger.debug(f"Message keys: {msg.keys()}")
+                        logger.debug(f"Files field: {msg.get('files', 'NO FILES FIELD')}")
+                        logger.debug(f"Kind field: {msg.get('kind', 'NO KIND FIELD')}")
+
                 if not messages:
                     break
+
+                logger.debug(f"Processing {len(messages)} messages at offset {offset}")
 
                 for msg in messages:
                     # Check if message has files
                     files = msg.get("files", [])
                     if files:
+                        logger.debug(f"Found {len(files)} files in message {msg.get('id')}")
                         for file_info in files:
-                            mime_type = file_info.get("type", "")
+                            # The API uses "mime" not "type"
+                            mime_type = file_info.get("mime", "")
+                            logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Build download URL
+                                # Construct download URL using app.thw-messenger.de
+                                # Pattern: https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}
                                 file_id = file_info.get("id")
-                                download_url = f"{self.base_url}/file/download/{file_id}"
+                                filename = file_info.get("name", "")
+
+                                # Files are hosted on app subdomain, not api subdomain
+                                app_base = self.base_url.replace("api.thw-messenger.de", "app.thw-messenger.de")
+                                download_url = f"{app_base}/thw/app.thw-messenger.de/{file_id}/{filename}"
+
+                                logger.debug(f"File ID: {file_id}, filename: {filename}")
+                                logger.debug(f"Download URL: {download_url}")
+
+                                # Get sender info from sender object
+                                sender = msg.get("sender", {})
+                                sender_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or "Unknown"
+
+                                # Get file size in bytes
+                                file_size = int(file_info.get("size_byte", 0))
 
                                 media_files.append(MediaFile(
                                     file_id=str(file_id),
                                     filename=file_info.get("name", ""),
                                     mime_type=mime_type,
-                                    size=file_info.get("size", 0),
+                                    size=file_size,
                                     channel_id=channel_id,
                                     message_id=str(msg.get("id", "")),
-                                    sender_id=str(msg.get("sender_id", "")),
-                                    sender_name=msg.get("sender_name", "Unknown"),
+                                    sender_id=str(sender.get("id", "")),
+                                    sender_name=sender_name,
                                     download_url=download_url,
-                                    timestamp=str(msg.get("created_at", ""))
+                                    timestamp=str(msg.get("time", ""))
                                 ))
+                            else:
+                                logger.debug(f"Skipping non-media file: {mime_type}")
 
                 offset += limit
                 await asyncio.sleep(0.1)  # Rate limiting
@@ -183,24 +214,37 @@ class HermineClient:
             raise
 
     async def download_file(self, url: str, timeout: int = None) -> bytes:
-        """Download a file from URL"""
+        """Download a file from URL (simple GET request, no authentication)"""
         try:
-            # Add authentication parameters to download
-            params = {
-                "device_id": self.device_id,
-                "client_key": self.client_key
-            }
+            # Files are hosted on app.thw-messenger.de and accessed via direct GET
+            # No authentication needed (browser uses credentials: "omit")
+            logger.debug(f"Downloading file from: {url}")
 
             response = self.session.get(
                 url,
-                params=params,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
             )
             response.raise_for_status()
-            return response.content
-        except RequestException as e:
+
+            # Validate response is not JSON error
+            content = response.content
+            content_type = response.headers.get('content-type', '')
+
+            if 'application/json' in content_type or content.startswith(b'{"status"'):
+                # This is an error response
+                try:
+                    import json
+                    error_data = json.loads(content)
+                    error_msg = error_data.get('status', {}).get('message', 'Unknown error')
+                    raise ValueError(f"API error: {error_msg}")
+                except json.JSONDecodeError:
+                    raise ValueError(f"Received JSON error response instead of file")
+
+            logger.debug(f"Downloaded {len(content)} bytes")
+            return content
+        except (RequestException, ValueError) as e:
             logger.error(f"✗ Download fehlgeschlagen: {e}")
             raise
 

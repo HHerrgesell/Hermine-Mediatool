@@ -7,12 +7,13 @@ from src.config import Config
 
 def setup_logger(config: Config) -> logging.Logger:
     """Setup logging configuration."""
-    logger = logging.getLogger('hermine')
-    logger.setLevel(getattr(logging, config.logging.level))
+    # Configure the root logger so all child loggers inherit the handlers
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, config.logging.level))
 
     # Remove existing handlers
-    for handler in logger.handlers[:]:
-        logger.removeHandler(handler)
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
 
     # Formatter
     formatter = logging.Formatter(
@@ -20,18 +21,22 @@ def setup_logger(config: Config) -> logging.Logger:
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
+    # Ensure log directory exists
+    log_dir = Path(config.storage.base_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+
     # File Handler
-    log_file = Path(config.storage.base_dir) / config.logging.file
+    log_file = log_dir / config.logging.file
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(getattr(logging, config.logging.level))
     file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
+    root_logger.addHandler(file_handler)
 
     # Console Handler
     if config.logging.console:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(getattr(logging, config.logging.level))
         console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
+        root_logger.addHandler(console_handler)
 
-    return logger
+    return root_logger

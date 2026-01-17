@@ -155,6 +155,70 @@ class ManifestDB:
         except sqlite3.Error:
             return 0
 
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get comprehensive statistics (alias for get_stats with more details)"""
+        try:
+            cursor = self.connection.cursor()
+
+            # Basic stats
+            cursor.execute('SELECT COUNT(*) as count, SUM(file_size) as total_size FROM downloaded_files')
+            row = cursor.fetchone()
+
+            # Count unique channels
+            cursor.execute('SELECT COUNT(DISTINCT channel_id) as channels FROM downloaded_files')
+            channels_row = cursor.fetchone()
+
+            # Count unique senders
+            cursor.execute('SELECT COUNT(DISTINCT sender) as senders FROM downloaded_files')
+            senders_row = cursor.fetchone()
+
+            return {
+                'total_files': row['count'] or 0,
+                'total_size': row['total_size'] or 0,
+                'channels': channels_row['channels'] or 0,
+                'senders': senders_row['senders'] or 0,
+                'errors': self._count_errors()
+            }
+        except sqlite3.Error as e:
+            logger.error(f"✗ Statistik-Abfrage fehlgeschlagen: {e}")
+            return {'total_files': 0, 'total_size': 0, 'channels': 0, 'senders': 0, 'errors': 0}
+
+    def get_files_by_channel(self) -> Dict[str, int]:
+        """Get file counts by channel"""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                SELECT channel_id, COUNT(*) as count
+                FROM downloaded_files
+                GROUP BY channel_id
+            ''')
+            return {row['channel_id']: row['count'] for row in cursor.fetchall()}
+        except sqlite3.Error as e:
+            logger.error(f"✗ Kanal-Statistik fehlgeschlagen: {e}")
+            return {}
+
+    def get_files_by_sender(self, channel_id: Optional[str] = None) -> Dict[str, int]:
+        """Get file counts by sender"""
+        try:
+            cursor = self.connection.cursor()
+            if channel_id:
+                cursor.execute('''
+                    SELECT sender, COUNT(*) as count
+                    FROM downloaded_files
+                    WHERE channel_id = ?
+                    GROUP BY sender
+                ''', (channel_id,))
+            else:
+                cursor.execute('''
+                    SELECT sender, COUNT(*) as count
+                    FROM downloaded_files
+                    GROUP BY sender
+                ''')
+            return {row['sender']: row['count'] for row in cursor.fetchall()}
+        except sqlite3.Error as e:
+            logger.error(f"✗ Absender-Statistik fehlgeschlagen: {e}")
+            return {}
+
     def close(self) -> None:
         """Close database connection"""
         if self.connection:
