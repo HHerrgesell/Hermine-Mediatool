@@ -349,32 +349,38 @@ class HermineClient:
                     decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
                     logger.debug(f"Chat key decrypted: {len(decrypted_chat_key)} bytes")
 
-                    # The file_key might be hex-encoded AES key (possibly encrypted with chat_key)
-                    # Try to use it directly first as hex
+                    # The file_key is encrypted with the chat_key
+                    # Decrypt it using AES with the file_iv
                     file_key_hex = media_file.file_key
                     file_iv_hex = media_file.file_iv
 
-                    # If key is 96 hex chars (48 bytes), it might be key+IV or needs further decryption
-                    if len(file_key_hex) == 96:
-                        # Might be 32-byte key + 16-byte IV concatenated, or encrypted
-                        logger.debug(f"File key is 48 bytes, might need decryption with chat_key")
-                        # For now, try using first 64 chars (32 bytes) as key
-                        file_key_bytes = bytes.fromhex(file_key_hex[:64])
-                    elif len(file_key_hex) == 64:
-                        # Standard 32-byte AES-256 key
-                        file_key_bytes = bytes.fromhex(file_key_hex)
-                    else:
-                        logger.warning(f"Unexpected file_key length: {len(file_key_hex)} hex chars")
-                        file_key_bytes = bytes.fromhex(file_key_hex)
+                    logger.debug(f"File key hex length: {len(file_key_hex)}, IV hex length: {len(file_iv_hex)}")
 
-                    file_iv_bytes = bytes.fromhex(file_iv_hex)
-                    logger.debug(f"Using file key: {len(file_key_bytes)} bytes, IV: {len(file_iv_bytes)} bytes")
+                    # Decrypt the file key using the chat key
+                    encrypted_file_key = bytes.fromhex(file_key_hex)
+                    file_key_iv = bytes.fromhex(file_iv_hex)
 
-                    # Decrypt the file data
+                    logger.debug(f"Decrypting file key ({len(encrypted_file_key)} bytes) with chat key...")
+
+                    from Crypto.Cipher import AES
+                    from Crypto.Util.Padding import unpad
+
+                    # Decrypt the file key using AES-CBC with chat_key
+                    cipher = AES.new(decrypted_chat_key, AES.MODE_CBC, iv=file_key_iv)
+                    padded_file_key = cipher.decrypt(encrypted_file_key)
+                    file_key_bytes = unpad(padded_file_key, AES.block_size)
+
+                    logger.debug(f"Decrypted file key: {len(file_key_bytes)} bytes")
+
+                    # Use e2e_iv for decrypting the actual file data
+                    file_data_iv = bytes.fromhex(media_file.e2e_iv)
+                    logger.debug(f"Using e2e_iv for file data decryption: {len(file_data_iv)} bytes")
+
+                    # Decrypt the file data using the decrypted file key and e2e_iv
                     decrypted_data = crypto.decrypt_file(
                         encrypted_data,
                         file_key_bytes,
-                        file_iv_bytes
+                        file_data_iv
                     )
 
                     logger.info(f"✓ Decrypted file: {len(encrypted_data)} → {len(decrypted_data)} bytes")
