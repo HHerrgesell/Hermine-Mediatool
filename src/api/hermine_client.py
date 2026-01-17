@@ -169,14 +169,13 @@ class HermineClient:
                             mime_type = file_info.get("mime", "")
                             logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Construct download URL using query parameter pattern
-                                # Similar to preview URL: https://api.thw-messenger.de/file/image?id={file_id}
-                                # Pattern: https://api.thw-messenger.de/file/download?id={file_id}
+                                # Construct download URL for app.thw-messenger.de
+                                # Pattern from browser: https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}
                                 file_id = file_info.get("id")
                                 filename = file_info.get("name", "")
 
-                                # Use API subdomain with query parameter
-                                download_url = f"{self.base_url}/file/download?id={file_id}"
+                                # Files are hosted on app subdomain with this specific path pattern
+                                download_url = f"https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}"
 
                                 logger.debug(f"File ID: {file_id}, filename: {filename}")
                                 logger.debug(f"Download URL: {download_url}")
@@ -214,51 +213,30 @@ class HermineClient:
             raise
 
     async def download_file(self, url: str, timeout: int = None) -> bytes:
-        """Download a file using POST with authentication"""
+        """Download a file from app.thw-messenger.de using simple GET request"""
         try:
-            # Extract file ID from URL if it's a full URL
-            if '?id=' in url:
-                file_id = url.split('?id=')[-1]
-            elif url.startswith('http'):
-                file_id = url.split('/')[-1].split('?')[0]
-            else:
-                file_id = url
+            logger.debug(f"Downloading file from: {url}")
 
-            logger.debug(f"Downloading file ID: {file_id}")
-
-            # Use POST with authentication credentials
-            data = {
-                "device_id": self.device_id,
-                "client_key": self.client_key,
-                "id": file_id
+            # Files are hosted on app.thw-messenger.de and accessed via simple GET
+            # No authentication needed - browser uses these headers
+            headers = {
+                'Referer': 'https://app.thw-messenger.de/thw/app',
+                'User-Agent': self.session.headers.get('User-Agent'),
             }
 
-            response = self.session.post(
-                f"{self.base_url}/file/download",
-                data=data,
+            response = self.session.get(
+                url,
+                headers=headers,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
             )
             response.raise_for_status()
 
-            # Validate response is not JSON error
             content = response.content
-            content_type = response.headers.get('content-type', '')
-
-            if 'application/json' in content_type or content.startswith(b'{"status"'):
-                # This is an error response
-                try:
-                    import json
-                    error_data = json.loads(content)
-                    error_msg = error_data.get('status', {}).get('message', 'Unknown error')
-                    raise ValueError(f"API error: {error_msg}")
-                except json.JSONDecodeError:
-                    raise ValueError(f"Received JSON error response instead of file")
-
             logger.debug(f"Downloaded {len(content)} bytes")
             return content
-        except (RequestException, ValueError) as e:
+        except RequestException as e:
             logger.error(f"✗ Download fehlgeschlagen: {e}")
             raise
 
