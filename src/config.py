@@ -12,6 +12,7 @@ class HermineConfig:
     base_url: str
     username: str
     password: str
+    encryption_key: str  # Passphrase for RSA private key
     timeout: int = 30
     verify_ssl: bool = True
 
@@ -78,6 +79,7 @@ class Config:
             base_url=os.getenv('HERMINE_BASE_URL', 'https://hermine.example.com'),
             username=os.getenv('HERMINE_USERNAME', ''),
             password=os.getenv('HERMINE_PASSWORD', ''),
+            encryption_key=os.getenv('HERMINE_ENCRYPTION_KEY', ''),
             timeout=int(os.getenv('HERMINE_TIMEOUT', '30')),
             verify_ssl=os.getenv('HERMINE_VERIFY_SSL', 'true').lower() == 'true'
         )
@@ -158,6 +160,8 @@ class Config:
             raise ValueError("HERMINE_USERNAME nicht konfiguriert")
         if not self.hermine.password:
             raise ValueError("HERMINE_PASSWORD nicht konfiguriert")
+        if not self.hermine.encryption_key:
+            raise ValueError("HERMINE_ENCRYPTION_KEY nicht konfiguriert")
         if not self.target_channels:
             raise ValueError("TARGET_CHANNELS nicht konfiguriert")
         return True
