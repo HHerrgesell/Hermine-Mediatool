@@ -397,7 +397,7 @@ class HermineClient:
             raise
 
     def _download_full_file_from_endpoint(self, media_file: MediaFile, timeout: int = None) -> Optional[bytes]:
-        """Attempt to download full file using direct URL (like browser ServiceWorker)
+        """Attempt to download full file using /file/download endpoint with multipart form-data
 
         Args:
             media_file: MediaFile object with encryption info
@@ -407,29 +407,36 @@ class HermineClient:
             Decrypted full file bytes, or None if download fails
         """
         try:
-            # Construct direct download URL (same pattern as browser)
-            # Pattern: https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}
-            download_url = f"https://app.thw-messenger.de/thw/app.thw-messenger.de/{media_file.file_id}/{media_file.filename}"
+            # Use the browser's exact approach: POST to /file/download?id={file_id}
+            # with multipart/form-data containing client_key and device_id
+            download_url = f"{self.base_url}/file/download?id={media_file.file_id}"
 
-            logger.debug(f"Attempting full file download from direct URL: {download_url}")
+            logger.debug(f"Attempting full file download from: {download_url}")
 
-            # Try direct URL download with authenticated session
+            # Prepare multipart form-data (like browser does)
+            form_data = {
+                'client_key': self.client_key,
+                'device_id': self.device_id,
+            }
+
             try:
-                response = self.session.get(
+                response = self.session.post(
                     download_url,
+                    data=form_data,  # requests will automatically use multipart/form-data
                     timeout=timeout or self.timeout,
                     verify=self.verify_ssl,
                     headers={
-                        "Referer": "https://app.thw-messenger.de/thw/app",
+                        "Origin": "https://app.thw-messenger.de",
+                        "Referer": "https://app.thw-messenger.de/",
                     }
                 )
 
                 # Check response
                 if response.status_code == 200:
                     encrypted_data = response.content
-                    logger.debug(f"✓ Downloaded {len(encrypted_data)} bytes from direct URL")
+                    logger.debug(f"✓ Downloaded {len(encrypted_data)} bytes from /file/download endpoint")
 
-                    # Decrypt the downloaded data if encrypted
+                    # The response is encrypted, so decrypt it
                     if media_file.encrypted and media_file.file_key and media_file.file_iv:
                         from ..crypto import HermineCrypto
                         from ..config import Config
@@ -466,11 +473,11 @@ class HermineClient:
                         logger.debug("File not encrypted, returning as-is")
                         return encrypted_data
                 else:
-                    logger.debug(f"Direct URL download failed with status {response.status_code}")
+                    logger.debug(f"/file/download failed with status {response.status_code}: {response.text[:200]}")
                     return None
 
             except Exception as e:
-                logger.debug(f"Failed to download from direct URL: {e}")
+                logger.debug(f"Failed to download from /file/download endpoint: {e}")
                 return None
 
         except Exception as e:
@@ -745,6 +752,52 @@ class HermineClient:
             logger.warning(f"✗ Test 4 failed: {e}")
             results["tests"].append({
                 "name": "POST to file/get",
+                "success": False,
+                "error": str(e)
+            })
+
+        # Test 5: POST with multipart/form-data (browser method)
+        logger.info("\n--- Test 5: POST with multipart/form-data (browser method) ---")
+        try:
+            download_url = f"{self.base_url}/file/download?id={file_id}"
+            form_data = {
+                'client_key': self.client_key,
+                'device_id': self.device_id,
+            }
+            response = self.session.post(
+                download_url,
+                data=form_data,
+                timeout=self.timeout,
+                verify=self.verify_ssl,
+                headers={
+                    "Origin": "https://app.thw-messenger.de",
+                    "Referer": "https://app.thw-messenger.de/",
+                }
+            )
+            logger.info(f"Status: {response.status_code}")
+            logger.info(f"Content length: {len(response.content)} bytes")
+            logger.info(f"Content type: {response.headers.get('Content-Type')}")
+
+            if response.status_code == 200:
+                logger.info(f"✓ Test 5 succeeded!")
+                results["tests"].append({
+                    "name": "POST with multipart/form-data",
+                    "success": True,
+                    "status_code": response.status_code,
+                    "content_length": len(response.content)
+                })
+            else:
+                logger.warning(f"✗ Test 5 failed with status {response.status_code}")
+                results["tests"].append({
+                    "name": "POST with multipart/form-data",
+                    "success": False,
+                    "status_code": response.status_code,
+                    "error": response.text[:200]
+                })
+        except Exception as e:
+            logger.warning(f"✗ Test 5 failed: {e}")
+            results["tests"].append({
+                "name": "POST with multipart/form-data",
                 "success": False,
                 "error": str(e)
             })
