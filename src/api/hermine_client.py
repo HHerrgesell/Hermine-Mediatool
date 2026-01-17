@@ -169,9 +169,15 @@ class HermineClient:
                             mime_type = file_info.get("mime", "")
                             logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Store file_id directly (not full URL)
+                                # Check if file has a URL field, otherwise use ID
                                 file_id = file_info.get("id")
-                                download_url = str(file_id)  # Just store the ID
+                                file_url = file_info.get("url") or file_info.get("download_url")
+
+                                if file_url:
+                                    download_url = file_url
+                                else:
+                                    # Construct URL from file ID
+                                    download_url = f"{self.base_url}/file/download/{file_id}"
 
                                 # Get sender info from sender object
                                 sender = msg.get("sender", {})
@@ -205,27 +211,52 @@ class HermineClient:
             logger.error(f"✗ Fehler beim Abrufen von Mediadateien: {e}")
             raise
 
-    async def download_file(self, file_id: str, timeout: int = None) -> bytes:
-        """Download a file by ID"""
+    async def download_file(self, url_or_id: str, timeout: int = None) -> bytes:
+        """Download a file by URL or ID"""
         try:
-            # Use POST with form data including file_id
-            data = {
-                "device_id": self.device_id,
-                "client_key": self.client_key,
-                "id": file_id  # Submit the file ID as a form parameter
-            }
+            # If it's a full URL, use it directly with credentials as form data
+            if url_or_id.startswith('http'):
+                # Full URL provided - submit it as "url" parameter
+                data = {
+                    "device_id": self.device_id,
+                    "client_key": self.client_key,
+                    "url": url_or_id
+                }
+                download_endpoint = f"{self.base_url}/file/download"
+            else:
+                # Just an ID - submit it as "file_id" parameter
+                data = {
+                    "device_id": self.device_id,
+                    "client_key": self.client_key,
+                    "file_id": url_or_id
+                }
+                download_endpoint = f"{self.base_url}/file/download"
 
-            download_url = f"{self.base_url}/file/download"
             response = self.session.post(
-                download_url,
+                download_endpoint,
                 data=data,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
             )
             response.raise_for_status()
-            return response.content
-        except RequestException as e:
+
+            # Validate response is not JSON error
+            content = response.content
+            content_type = response.headers.get('content-type', '')
+
+            if 'application/json' in content_type or content.startswith(b'{"status"'):
+                # This is an error response
+                try:
+                    import json
+                    error_data = json.loads(content)
+                    error_msg = error_data.get('status', {}).get('message', 'Unknown error')
+                    raise ValueError(f"API error: {error_msg}")
+                except json.JSONDecodeError:
+                    raise ValueError(f"Received JSON error response instead of file")
+
+            return content
+        except (RequestException, ValueError) as e:
             logger.error(f"✗ Download fehlgeschlagen: {e}")
             raise
 
