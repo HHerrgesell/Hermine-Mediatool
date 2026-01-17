@@ -79,10 +79,10 @@ class DownloadEngine:
             retry_count = 0
             while retry_count < self.config.download.retry_attempts:
                 try:
-                    # Download file
+                    # Download file (with decryption if encrypted)
                     logger.debug(f"⬇️  Downloade: {media_file.filename}")
                     file_data = await self.hermine.download_file(
-                        media_file.download_url,
+                        media_file,
                         timeout=self.config.download.download_timeout
                     )
                     

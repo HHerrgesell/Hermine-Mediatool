@@ -20,19 +20,38 @@ class HermineCrypto:
 
     def __init__(self, private_key_pem: str, encryption_password: str):
         """Initialize crypto with private key.
-        
+
         Args:
             private_key_pem: PEM-encoded RSA private key
             encryption_password: Passphrase for private key
         """
         try:
-            self.private_key = RSA.import_key(
-                private_key_pem,
-                passphrase=encryption_password.encode() if isinstance(encryption_password, str) else encryption_password
-            )
-            logger.info("✓ Private key loaded successfully")
+            passphrase = encryption_password.encode() if isinstance(encryption_password, str) else encryption_password
+
+            # Try to import the key with passphrase first
+            try:
+                self.private_key = RSA.import_key(private_key_pem, passphrase=passphrase)
+                logger.info("✓ Private key loaded successfully (with passphrase)")
+            except (ValueError, IndexError, TypeError) as e:
+                logger.debug(f"Failed with passphrase: {e}, trying without passphrase")
+                # Try without passphrase
+                try:
+                    self.private_key = RSA.import_key(private_key_pem)
+                    logger.info("✓ Private key loaded successfully (without passphrase)")
+                except Exception as e2:
+                    logger.error(f"Failed to load key without passphrase: {e2}")
+                    # Try alternative PEM headers
+                    if "-----BEGIN RSA PRIVATE KEY-----" in private_key_pem:
+                        alt_key = private_key_pem.replace("-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----")
+                        alt_key = alt_key.replace("-----END RSA PRIVATE KEY-----", "-----END PRIVATE KEY-----")
+                        logger.debug("Trying with alternative PEM headers (PRIVATE KEY)")
+                        self.private_key = RSA.import_key(alt_key, passphrase=passphrase)
+                        logger.info("✓ Private key loaded successfully (alternative format)")
+                    else:
+                        raise
         except Exception as e:
             logger.error(f"Failed to load private key: {e}")
+            logger.debug(f"Key starts with: {private_key_pem[:100]}...")
             raise
 
     def decrypt_conversation_key(
