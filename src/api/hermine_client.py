@@ -148,6 +148,21 @@ class HermineClient:
             key_start = private_key[:50] if len(private_key) > 50 else private_key
             logger.debug(f"Private key length: {key_length}, starts with: {key_start[:30]}...")
 
+            # Check if key is JSON-wrapped (starts with "{")
+            if private_key.strip().startswith("{"):
+                logger.debug("Private key appears to be JSON-wrapped, parsing...")
+                import json
+                try:
+                    key_json = json.loads(private_key)
+                    # Extract the actual PEM key from the "private" field
+                    if "private" in key_json:
+                        private_key = key_json["private"]
+                        logger.debug(f"Extracted PEM key from JSON, length: {len(private_key)}")
+                    else:
+                        logger.warning(f"JSON doesn't have 'private' field. Keys: {list(key_json.keys())}")
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse key as JSON: {e}, using as-is")
+
             # Check if key needs PEM formatting
             if not private_key.startswith("-----BEGIN"):
                 logger.debug("Private key doesn't have PEM headers, adding them")
