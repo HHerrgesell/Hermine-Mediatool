@@ -169,14 +169,14 @@ class HermineClient:
                             mime_type = file_info.get("mime", "")
                             logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Construct download URL using app.thw-messenger.de
-                                # Pattern: https://app.thw-messenger.de/thw/{file_id}/{filename}
+                                # Construct download URL using query parameter pattern
+                                # Similar to preview URL: https://api.thw-messenger.de/file/image?id={file_id}
+                                # Pattern: https://api.thw-messenger.de/file/download?id={file_id}
                                 file_id = file_info.get("id")
                                 filename = file_info.get("name", "")
 
-                                # Files are hosted on app subdomain, not api subdomain
-                                app_base = self.base_url.replace("api.thw-messenger.de", "app.thw-messenger.de")
-                                download_url = f"{app_base}/thw/{file_id}/{filename}"
+                                # Use API subdomain with query parameter
+                                download_url = f"{self.base_url}/file/download?id={file_id}"
 
                                 logger.debug(f"File ID: {file_id}, filename: {filename}")
                                 logger.debug(f"Download URL: {download_url}")
