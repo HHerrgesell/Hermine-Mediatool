@@ -29,6 +29,7 @@ class MediaFile:
     file_key: str = ""
     file_iv: str = ""
     chat_key: str = ""
+    base_64_data: str = ""  # Encrypted file data embedded in message response
 
 
 class HermineClient:
@@ -222,6 +223,9 @@ class HermineClient:
                                     file_iv = key_info.get("iv", "")
                                     chat_key = key_info.get("chat_key", "")
 
+                                # Extract base64-encoded file data (embedded in response)
+                                base_64_data = file_info.get("base_64", "")
+
                                 media_files.append(MediaFile(
                                     file_id=str(file_id),
                                     filename=file_info.get("name", ""),
@@ -237,7 +241,8 @@ class HermineClient:
                                     e2e_iv=e2e_iv,
                                     file_key=file_key,
                                     file_iv=file_iv,
-                                    chat_key=chat_key
+                                    chat_key=chat_key,
+                                    base_64_data=base_64_data
                                 ))
                             else:
                                 logger.debug(f"Skipping non-media file: {mime_type}")
@@ -253,41 +258,21 @@ class HermineClient:
             raise
 
     async def download_file(self, media_file: MediaFile, timeout: int = None) -> bytes:
-        """Download and decrypt a file using POST with authentication
+        """Decrypt file data from base64-encoded embedded data
 
-        Files are encrypted end-to-end and must be downloaded via POST request
-        with authentication, then decrypted using the file's encryption keys.
+        Files are embedded in the message/content response as base64-encoded
+        encrypted data. No separate download is needed.
         """
         try:
-            logger.debug(f"Downloading file ID: {media_file.file_id}")
+            logger.debug(f"Processing file ID: {media_file.file_id}")
 
-            # Download encrypted file data via POST with authentication
-            # API accepts either "file_id" or "url" parameter
-            data = {
-                "device_id": self.device_id,
-                "client_key": self.client_key,
-                "file_id": media_file.file_id
-            }
+            # File data is already embedded in the message response as base64
+            if not media_file.base_64_data:
+                raise ValueError(f"No base64 data found for file {media_file.file_id}")
 
-            response = self.session.post(
-                f"{self.base_url}/file/download",
-                data=data,
-                timeout=timeout or self.timeout,
-                verify=self.verify_ssl,
-                stream=True
-            )
-            response.raise_for_status()
-
-            # Check for JSON error response
-            content_type = response.headers.get('content-type', '')
-            if 'application/json' in content_type:
-                import json
-                error_data = response.json()
-                error_msg = error_data.get('status', {}).get('message', 'Unknown error')
-                raise ValueError(f"API error: {error_msg}")
-
-            encrypted_data = response.content
-            logger.debug(f"Downloaded {len(encrypted_data)} bytes (encrypted)")
+            # Decode from hex string to bytes (it's hex-encoded, not base64!)
+            encrypted_data = bytes.fromhex(media_file.base_64_data)
+            logger.debug(f"Decoded {len(encrypted_data)} bytes from hex (encrypted)")
 
             # Decrypt if file is encrypted
             if media_file.encrypted and media_file.file_key and media_file.file_iv:
