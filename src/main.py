@@ -28,6 +28,9 @@ async def main():
         logger.info("=" * 70)
         logger.info(f"Config: {config.to_dict()}")
 
+        # Validate configuration
+        config.validate()
+
         # Initialisiere Datenbank
         db = ManifestDB(config.storage.base_dir / "manifest.db")
         db.initialize()

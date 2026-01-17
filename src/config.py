@@ -69,10 +69,21 @@ class Config:
 
     def __init__(self, env_path: Optional[Path] = None):
         """Initialize configuration from .env file or environment variables."""
+        # Check if .env file exists and load it
         if env_path:
+            if not env_path.exists():
+                raise FileNotFoundError(f".env file not found at: {env_path}")
             load_dotenv(env_path)
         else:
-            load_dotenv()
+            # Try to find .env in current directory
+            env_file = Path('.env')
+            if env_file.exists():
+                load_dotenv()
+            else:
+                print("⚠️  WARNING: No .env file found in current directory!")
+                print(f"   Looking for: {env_file.absolute()}")
+                print("   Create a .env file or set environment variables manually.")
+                print("   See .env.example for template.\n")
 
         # Hermine Configuration
         self.hermine = HermineConfig(
@@ -154,14 +165,26 @@ class Config:
 
     def validate(self) -> bool:
         """Validate configuration."""
-        if not self.hermine.base_url:
-            raise ValueError("HERMINE_BASE_URL nicht konfiguriert")
+        errors = []
+
+        # Check for default/missing values
+        if self.hermine.base_url == 'https://hermine.example.com':
+            errors.append("HERMINE_BASE_URL is not configured (using default value)")
         if not self.hermine.username:
-            raise ValueError("HERMINE_USERNAME nicht konfiguriert")
+            errors.append("HERMINE_USERNAME is not configured")
         if not self.hermine.password:
-            raise ValueError("HERMINE_PASSWORD nicht konfiguriert")
+            errors.append("HERMINE_PASSWORD is not configured")
         if not self.hermine.encryption_key:
-            raise ValueError("HERMINE_ENCRYPTION_KEY nicht konfiguriert")
+            errors.append("HERMINE_ENCRYPTION_KEY is not configured")
         if not self.target_channels:
-            raise ValueError("TARGET_CHANNELS nicht konfiguriert")
+            errors.append("TARGET_CHANNELS is not configured (no channels to download)")
+
+        if errors:
+            error_msg = "\n❌ Configuration errors found:\n"
+            for error in errors:
+                error_msg += f"   - {error}\n"
+            error_msg += "\n💡 Please check your .env file and ensure all required variables are set."
+            error_msg += "\n   Run 'python3 -m src.cli.commands list-channels' to see available channels.\n"
+            raise ValueError(error_msg)
+
         return True
