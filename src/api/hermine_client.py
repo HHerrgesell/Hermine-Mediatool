@@ -165,24 +165,32 @@ class HermineClient:
                     if files:
                         logger.debug(f"Found {len(files)} files in message {msg.get('id')}")
                         for file_info in files:
-                            mime_type = file_info.get("type", "")
-                            logger.debug(f"File: {file_info.get('name')}, type: {mime_type}")
+                            # The API uses "mime" not "type"
+                            mime_type = file_info.get("mime", "")
+                            logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
                                 # Build download URL
                                 file_id = file_info.get("id")
                                 download_url = f"{self.base_url}/file/download/{file_id}"
 
+                                # Get sender info from sender object
+                                sender = msg.get("sender", {})
+                                sender_name = f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or "Unknown"
+
+                                # Get file size in bytes
+                                file_size = int(file_info.get("size_byte", 0))
+
                                 media_files.append(MediaFile(
                                     file_id=str(file_id),
                                     filename=file_info.get("name", ""),
                                     mime_type=mime_type,
-                                    size=file_info.get("size", 0),
+                                    size=file_size,
                                     channel_id=channel_id,
                                     message_id=str(msg.get("id", "")),
-                                    sender_id=str(msg.get("sender_id", "")),
-                                    sender_name=msg.get("sender_name", "Unknown"),
+                                    sender_id=str(sender.get("id", "")),
+                                    sender_name=sender_name,
                                     download_url=download_url,
-                                    timestamp=str(msg.get("created_at", ""))
+                                    timestamp=str(msg.get("time", ""))
                                 ))
                             else:
                                 logger.debug(f"Skipping non-media file: {mime_type}")
