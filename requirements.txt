@@ -4,6 +4,10 @@ aiohttp>=3.9.0
 python-dotenv>=1.0.0
 python-dateutil>=2.9.0
 
+# Cryptography (E2E Decryption)
+pycryptodome>=3.19.0
+PyJWT>=2.8.0
+
 # Nextcloud (optional)
 webdav4>=0.10.0
 
