@@ -217,31 +217,15 @@ class HermineClient:
             logger.error(f"✗ Fehler beim Abrufen von Mediadateien: {e}")
             raise
 
-    async def download_file(self, url_or_id: str, timeout: int = None) -> bytes:
-        """Download a file by URL or ID"""
+    async def download_file(self, url: str, timeout: int = None) -> bytes:
+        """Download a file from URL (simple GET request, no authentication)"""
         try:
-            # Extract file ID if it's a URL
-            if url_or_id.startswith('http'):
-                file_id = url_or_id.split('/')[-1]
-                logger.debug(f"Extracted file_id from URL: {file_id}")
-            else:
-                file_id = url_or_id
-                logger.debug(f"Using file_id directly: {file_id}")
+            # Files are hosted on app.thw-messenger.de and accessed via direct GET
+            # No authentication needed (browser uses credentials: "omit")
+            logger.debug(f"Downloading file from: {url}")
 
-            # Try sending both "id" and "url" parameters
-            data = {
-                "device_id": self.device_id,
-                "client_key": self.client_key,
-                "id": file_id,
-                "url": url_or_id
-            }
-
-            logger.debug(f"Download request: POST {self.base_url}/file/download with keys: {list(data.keys())}")
-            download_endpoint = f"{self.base_url}/file/download"
-
-            response = self.session.post(
-                download_endpoint,
-                data=data,
+            response = self.session.get(
+                url,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
@@ -262,6 +246,7 @@ class HermineClient:
                 except json.JSONDecodeError:
                     raise ValueError(f"Received JSON error response instead of file")
 
+            logger.debug(f"Downloaded {len(content)} bytes")
             return content
         except (RequestException, ValueError) as e:
             logger.error(f"✗ Download fehlgeschlagen: {e}")
