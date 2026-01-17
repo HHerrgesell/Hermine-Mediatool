@@ -145,15 +145,28 @@ class HermineClient:
 
                 messages = data.get("messages", [])
 
+                # Debug: log first message structure
+                if messages and offset == 0:
+                    logger.debug(f"First message structure: {messages[0].keys() if messages else 'no messages'}")
+                    if messages and len(messages) > 0:
+                        msg = messages[0]
+                        logger.debug(f"Message keys: {msg.keys()}")
+                        logger.debug(f"Files field: {msg.get('files', 'NO FILES FIELD')}")
+                        logger.debug(f"Kind field: {msg.get('kind', 'NO KIND FIELD')}")
+
                 if not messages:
                     break
+
+                logger.debug(f"Processing {len(messages)} messages at offset {offset}")
 
                 for msg in messages:
                     # Check if message has files
                     files = msg.get("files", [])
                     if files:
+                        logger.debug(f"Found {len(files)} files in message {msg.get('id')}")
                         for file_info in files:
                             mime_type = file_info.get("type", "")
+                            logger.debug(f"File: {file_info.get('name')}, type: {mime_type}")
                             if self._is_media_file(mime_type):
                                 # Build download URL
                                 file_id = file_info.get("id")
@@ -171,6 +184,8 @@ class HermineClient:
                                     download_url=download_url,
                                     timestamp=str(msg.get("created_at", ""))
                                 ))
+                            else:
+                                logger.debug(f"Skipping non-media file: {mime_type}")
 
                 offset += limit
                 await asyncio.sleep(0.1)  # Rate limiting
