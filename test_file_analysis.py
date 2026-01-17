@@ -67,10 +67,11 @@ def main():
                     base64_data = file_info.get('base_64', '')
                     if base64_data:
                         actual_size = len(bytes.fromhex(base64_data))
+                        advertised_size = int(file_info.get('size_byte', 1))
                         print(f"\n  Embedded data (base_64 field):")
                         print(f"    Hex string length: {len(base64_data)}")
                         print(f"    Decoded bytes: {actual_size}")
-                        print(f"    Ratio to advertised size: {actual_size / file_info.get('size_byte', 1) * 100:.1f}%")
+                        print(f"    Ratio to advertised size: {actual_size / advertised_size * 100:.1f}%")
 
                     # Check keys structure
                     keys = file_info.get('keys', [])
