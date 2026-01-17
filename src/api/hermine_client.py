@@ -169,9 +169,9 @@ class HermineClient:
                             mime_type = file_info.get("mime", "")
                             logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Build download URL
+                                # Store file_id directly (not full URL)
                                 file_id = file_info.get("id")
-                                download_url = f"{self.base_url}/file/download/{file_id}"
+                                download_url = str(file_id)  # Just store the ID
 
                                 # Get sender info from sender object
                                 sender = msg.get("sender", {})
@@ -205,17 +205,19 @@ class HermineClient:
             logger.error(f"✗ Fehler beim Abrufen von Mediadateien: {e}")
             raise
 
-    async def download_file(self, url: str, timeout: int = None) -> bytes:
-        """Download a file from URL"""
+    async def download_file(self, file_id: str, timeout: int = None) -> bytes:
+        """Download a file by ID"""
         try:
-            # Use POST with form data for authentication (matching API pattern)
+            # Use POST with form data including file_id
             data = {
                 "device_id": self.device_id,
-                "client_key": self.client_key
+                "client_key": self.client_key,
+                "id": file_id  # Submit the file ID as a form parameter
             }
 
+            download_url = f"{self.base_url}/file/download"
             response = self.session.post(
-                url,
+                download_url,
                 data=data,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,

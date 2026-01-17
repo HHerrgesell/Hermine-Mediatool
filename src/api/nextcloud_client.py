@@ -59,7 +59,7 @@ class NextcloudClient:
         # Upload durchführen (run blocking I/O in thread pool to avoid blocking event loop)
         def _upload_file_sync():
             with open(local_path, "rb") as f:
-                self.client.upload_fileobj(remote_file_path, f)
+                self.client.upload_fileobj(f, remote_file_path)  # Correct parameter order
 
         await asyncio.to_thread(_upload_file_sync)
 
