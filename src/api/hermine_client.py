@@ -113,11 +113,30 @@ class HermineClient:
 
         try:
             data = self._post("security/get_private_key", {})
+
+            # Log all available fields to understand response structure
+            logger.debug(f"Private key response fields: {list(data.keys())}")
+
             private_key = data.get("private_key", "")
 
+            # Check if key is empty and log response size
+            if not private_key or private_key.strip() == "":
+                logger.error("Private key is empty!")
+                logger.debug(f"Full response data keys: {data.keys()}")
+                # Try alternative field names
+                for key_name in ["privateKey", "key", "rsa_key", "encrypted_private_key"]:
+                    if key_name in data:
+                        logger.debug(f"Found alternative key field: {key_name}")
+                        private_key = data.get(key_name, "")
+                        break
+
+            if not private_key:
+                raise ValueError("No private key found in API response. User may need to generate keys in the app first.")
+
             # Log key format for debugging
+            key_length = len(private_key)
             key_start = private_key[:50] if len(private_key) > 50 else private_key
-            logger.debug(f"Private key starts with: {key_start[:30]}...")
+            logger.debug(f"Private key length: {key_length}, starts with: {key_start[:30]}...")
 
             # Check if key needs PEM formatting
             if not private_key.startswith("-----BEGIN"):
