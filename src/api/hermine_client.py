@@ -214,14 +214,28 @@ class HermineClient:
             raise
 
     async def download_file(self, url: str, timeout: int = None) -> bytes:
-        """Download a file from URL (simple GET request, no authentication)"""
+        """Download a file using POST with authentication"""
         try:
-            # Files are hosted on app.thw-messenger.de and accessed via direct GET
-            # No authentication needed (browser uses credentials: "omit")
-            logger.debug(f"Downloading file from: {url}")
+            # Extract file ID from URL if it's a full URL
+            if '?id=' in url:
+                file_id = url.split('?id=')[-1]
+            elif url.startswith('http'):
+                file_id = url.split('/')[-1].split('?')[0]
+            else:
+                file_id = url
 
-            response = self.session.get(
-                url,
+            logger.debug(f"Downloading file ID: {file_id}")
+
+            # Use POST with authentication credentials
+            data = {
+                "device_id": self.device_id,
+                "client_key": self.client_key,
+                "id": file_id
+            }
+
+            response = self.session.post(
+                f"{self.base_url}/file/download",
+                data=data,
                 timeout=timeout or self.timeout,
                 verify=self.verify_ssl,
                 stream=True
