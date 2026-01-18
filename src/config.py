@@ -61,6 +61,8 @@ class StorageConfig:
     calculate_checksums: bool = True
     extract_metadata: bool = True
     generate_thumbnails: bool = False
+    set_exif_author: bool = True  # Set Author EXIF field from uploader name
+    sanitize_exif: bool = False  # Remove sensitive EXIF data (GPS, serial numbers, etc.)
 
 
 @dataclass
@@ -132,7 +134,9 @@ class Config:
             create_manifest=os.getenv('CREATE_MANIFEST', 'true').lower() == 'true',
             calculate_checksums=os.getenv('CALCULATE_CHECKSUMS', 'true').lower() == 'true',
             extract_metadata=os.getenv('EXTRACT_METADATA', 'true').lower() == 'true',
-            generate_thumbnails=os.getenv('GENERATE_THUMBNAILS', 'false').lower() == 'true'
+            generate_thumbnails=os.getenv('GENERATE_THUMBNAILS', 'false').lower() == 'true',
+            set_exif_author=os.getenv('SET_EXIF_AUTHOR', 'true').lower() == 'true',
+            sanitize_exif=os.getenv('SANITIZE_EXIF', 'false').lower() == 'true'
         )
 
         # Download Parameters
