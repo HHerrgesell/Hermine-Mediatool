@@ -41,20 +41,44 @@ class NextcloudClient:
             logger.error(f"✗ WebDAV-Verbindung fehlgeschlagen: {e}")
             raise
 
-    async def upload_file(self, local_path: Path, filename: str) -> str:
-        """Upload file to Nextcloud"""
-        remote_file_path = f"{self.remote_path}/{filename}"
+    def _ensure_remote_dirs(self, remote_dir: str) -> None:
+        """Recursively create remote directories if they don't exist.
+
+        Args:
+            remote_dir: Remote directory path (e.g., 'Hermine-Media/2026/01')
+        """
+        parts = remote_dir.split("/")
+        current_path = ""
+
+        for part in parts:
+            if not part:
+                continue
+            current_path = f"{current_path}/{part}" if current_path else part
+            try:
+                if not self.client.exists(current_path):
+                    self.client.mkdir(current_path)
+                    logger.debug(f"✓ Remote-Verzeichnis erstellt: {current_path}")
+            except Exception as e:
+                # Directory might already exist or be created by another concurrent upload
+                logger.debug(f"Verzeichnis {current_path}: {e}")
+
+    async def upload_file(self, local_path: Path, remote_path: str) -> str:
+        """Upload file to Nextcloud with templated path support.
+
+        Args:
+            local_path: Path to local file to upload
+            remote_path: Remote path (can include directories, e.g., '2026/01/sender_file.jpg')
+
+        Returns:
+            Full remote path where file was uploaded
+        """
+        remote_file_path = f"{self.remote_path}/{remote_path}"
         remote_file_path = remote_file_path.lstrip("/")
 
-        # Sicherstellen, dass das Zielverzeichnis existiert
+        # Ensure all parent directories exist (create recursively)
         remote_dir = "/".join(remote_file_path.split("/")[:-1])
         if remote_dir:
-            try:
-                if not self.client.exists(remote_dir):
-                    self.client.mkdir(remote_dir)
-            except Exception as e:
-                # Wenn der Ordner schon existiert, ignorieren wir den Fehler
-                logger.debug(f"Could not create directory {remote_dir}: {e}")
+            self._ensure_remote_dirs(remote_dir)
 
         # Upload durchführen (run blocking I/O in thread pool to avoid blocking event loop)
         def _upload_file_sync():
