@@ -219,6 +219,150 @@ class ManifestDB:
             logger.error(f"✗ Absender-Statistik fehlgeschlagen: {e}")
             return {}
 
+    def get_all_files(self, limit: int = 100, offset: int = 0,
+                      search: Optional[str] = None,
+                      channel_id: Optional[str] = None,
+                      sender: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all downloaded files with optional filtering.
+
+        Args:
+            limit: Maximum number of files to return
+            offset: Offset for pagination
+            search: Search term for filename
+            channel_id: Filter by channel
+            sender: Filter by sender
+
+        Returns:
+            List of file records as dictionaries
+        """
+        try:
+            cursor = self.connection.cursor()
+
+            query = 'SELECT * FROM downloaded_files WHERE 1=1'
+            params = []
+
+            if search:
+                query += ' AND (filename LIKE ? OR sender LIKE ?)'
+                search_term = f'%{search}%'
+                params.extend([search_term, search_term])
+
+            if channel_id:
+                query += ' AND channel_id = ?'
+                params.append(channel_id)
+
+            if sender:
+                query += ' AND sender = ?'
+                params.append(sender)
+
+            query += ' ORDER BY download_timestamp DESC LIMIT ? OFFSET ?'
+            params.extend([limit, offset])
+
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+
+        except sqlite3.Error as e:
+            logger.error(f"✗ Datei-Abfrage fehlgeschlagen: {e}")
+            return []
+
+    def get_file_by_id(self, file_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single file by its file_id.
+
+        Args:
+            file_id: The file ID to look up
+
+        Returns:
+            File record as dictionary or None
+        """
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('SELECT * FROM downloaded_files WHERE file_id = ?', (file_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            logger.error(f"✗ Datei-Abfrage fehlgeschlagen: {e}")
+            return None
+
+    def delete_file_record(self, file_id: str) -> bool:
+        """Delete a file record from the database (allows re-download).
+
+        Args:
+            file_id: The file ID to delete
+
+        Returns:
+            True if deleted, False otherwise
+        """
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('DELETE FROM downloaded_files WHERE file_id = ?', (file_id,))
+            self.connection.commit()
+            deleted = cursor.rowcount > 0
+            if deleted:
+                logger.info(f"✓ Datensatz gelöscht: {file_id}")
+            return deleted
+        except sqlite3.Error as e:
+            logger.error(f"✗ Datensatz-Löschung fehlgeschlagen: {e}")
+            return False
+
+    def count_files(self, search: Optional[str] = None,
+                    channel_id: Optional[str] = None,
+                    sender: Optional[str] = None) -> int:
+        """Count files with optional filtering.
+
+        Args:
+            search: Search term for filename
+            channel_id: Filter by channel
+            sender: Filter by sender
+
+        Returns:
+            Total count of matching files
+        """
+        try:
+            cursor = self.connection.cursor()
+
+            query = 'SELECT COUNT(*) as count FROM downloaded_files WHERE 1=1'
+            params = []
+
+            if search:
+                query += ' AND (filename LIKE ? OR sender LIKE ?)'
+                search_term = f'%{search}%'
+                params.extend([search_term, search_term])
+
+            if channel_id:
+                query += ' AND channel_id = ?'
+                params.append(channel_id)
+
+            if sender:
+                query += ' AND sender = ?'
+                params.append(sender)
+
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+            return row['count'] or 0
+
+        except sqlite3.Error as e:
+            logger.error(f"✗ Zähl-Abfrage fehlgeschlagen: {e}")
+            return 0
+
+    def get_unique_channels(self) -> List[str]:
+        """Get list of unique channel IDs."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('SELECT DISTINCT channel_id FROM downloaded_files ORDER BY channel_id')
+            return [row['channel_id'] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"✗ Kanal-Abfrage fehlgeschlagen: {e}")
+            return []
+
+    def get_unique_senders(self) -> List[str]:
+        """Get list of unique senders."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('SELECT DISTINCT sender FROM downloaded_files ORDER BY sender')
+            return [row['sender'] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"✗ Absender-Abfrage fehlgeschlagen: {e}")
+            return []
+
     def close(self) -> None:
         """Close database connection"""
         if self.connection:

@@ -52,6 +52,7 @@ class DownloadConfig:
 class StorageConfig:
     """Storage Configuration"""
     base_dir: Path
+    data_dir: Path  # Separate directory for database and metadata
     path_template: str = "{year}/{month:02d}/{sender}_{filename}"
     organize_by_channel: bool = True
     organize_by_date: bool = True
@@ -117,8 +118,13 @@ class Config:
         base_dir = Path(os.getenv('DOWNLOAD_DIR', './downloads'))
         base_dir.mkdir(parents=True, exist_ok=True)
 
+        # Data directory for database and metadata (defaults to ./data or DOWNLOAD_DIR for backward compatibility)
+        data_dir = Path(os.getenv('DATA_DIR', os.getenv('DOWNLOAD_DIR', './data')))
+        data_dir.mkdir(parents=True, exist_ok=True)
+
         self.storage = StorageConfig(
             base_dir=base_dir,
+            data_dir=data_dir,
             path_template=os.getenv('PATH_TEMPLATE', '{year}/{month:02d}/{sender}_{filename}'),
             organize_by_channel=os.getenv('ORGANIZE_BY_CHANNEL', 'true').lower() == 'true',
             organize_by_date=os.getenv('ORGANIZE_BY_DATE', 'true').lower() == 'true',
