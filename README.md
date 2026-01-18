@@ -15,7 +15,7 @@ Automatisiertes Skript zum vollständigen Download aller Bilder und Videos aus H
 - **Unterstützung für verschlüsselte Kanäle** mit RSA-Entschlüsselung
 
 🔗 **Integration:**
-- Hermine API-Support (automatische Versions-Erkennung)
+- Hermine/Stashcat API-Support (flexibel konfigurierbar)
 - Optional: Nextcloud WebDAV Auto-Upload
 - Strukturierte Logging-Ausgabe
 
@@ -24,6 +24,7 @@ Automatisiertes Skript zum vollständigen Download aller Bilder und Videos aus H
 - Umfangreiche Error-Handling und Retry-Strategien
 - Konfigurierbare Pfad-Templates
 - MIME-Type Filterung
+- **Vollständig konfigurierbare Domains und API-Settings**
 
 ## Installation
 
@@ -97,6 +98,29 @@ HERMINE_ENCRYPTION_KEY=your_rsa_passphrase
 ```
 
 Dieser Schlüssel wird verwendet, um verschlüsselte Medien-Dateien zu entschlüsseln. Das Crypto-Modul behandelt die RSA-Entschlüsselung automatisch, wenn verschlüsselte Dateien erkannt werden.
+
+### Erweiterte API-Konfiguration
+
+Für andere Hermine/Stashcat-Installationen können die Domain-Einstellungen angepasst werden:
+
+```bash
+# Domains (optional - Defaults für THW Messenger)
+HERMINE_APP_DOMAIN=https://app.thw-messenger.de
+HERMINE_FILE_DOMAIN=https://app.thw-messenger.de/thw/app.thw-messenger.de
+
+# API Client Settings (optional - imitiert Browser-Verhalten)
+HERMINE_USER_AGENT=Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N)...
+HERMINE_APP_NAME=hermine@thw-Chrome:97.0.4692.99-browser-4.11.1
+```
+
+| Parameter | Beschreibung | Default |
+|-----------|--------------|--------|
+| `HERMINE_APP_DOMAIN` | Domain für Origin/Referer Headers | `https://app.thw-messenger.de` |
+| `HERMINE_FILE_DOMAIN` | Domain-Pattern für Datei-Downloads | `https://app.thw-messenger.de/thw/app.thw-messenger.de` |
+| `HERMINE_USER_AGENT` | User-Agent String für Requests | Chrome Mobile UA |
+| `HERMINE_APP_NAME` | App-Identifier für Authentifizierung | `hermine@thw-Chrome:...` |
+
+> **Hinweis:** Diese Einstellungen sind optional. Die Defaults sind für den THW Messenger konfiguriert und funktionieren ohne Änderungen.
 
 ### Pfad-Templates
 
@@ -356,6 +380,14 @@ Stelle sicher, dass der ENCRYPTION_KEY korrekt konfiguriert ist:
 HERMINE_ENCRYPTION_KEY=your_rsa_passphrase
 ```
 
+### Andere Hermine/Stashcat Installation
+
+Für andere Installationen (nicht THW Messenger) passe die Domains an:
+```bash
+HERMINE_APP_DOMAIN=https://your-instance.example.com
+HERMINE_FILE_DOMAIN=https://files.your-instance.example.com
+```
+
 ## Projektstruktur
 
 ```
@@ -425,6 +457,6 @@ Für Bugs und Fragen: [Issues](https://github.com/HHerrgesell/Hermine-Mediatool/
 
 ---
 
-**Version:** 1.2.0  
+**Version:** 1.3.0  
 **Zuletzt aktualisiert:** 2026-01-18  
 **Status:** Production Ready ✅
