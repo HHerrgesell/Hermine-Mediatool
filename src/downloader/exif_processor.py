@@ -51,13 +51,14 @@ class EXIFProcessor:
                 creation_dt = self.exif_handler.get_creation_datetime(file_path)
 
             # Check and set Author field from sender_name if not present
-            if sender_name:
+            if self.config.storage.set_exif_author and sender_name:
                 success, was_modified = self.exif_handler.ensure_author(file_path, sender_name)
                 if was_modified:
                     logger.debug(f"✓ Author set to: {sender_name}")
 
-            # Remove sensitive data (but keep Author!)
-            if self.config.storage.extract_metadata:
+            # Remove sensitive EXIF data (GPS, serial numbers, etc.) - only if explicitly enabled
+            # Default is False to preserve original EXIF data
+            if self.config.storage.sanitize_exif:
                 success = self.exif_handler.sanitize_exif(file_path)
                 if success:
                     logger.debug(f"✓ EXIF sanitized: {file_path.name}")
