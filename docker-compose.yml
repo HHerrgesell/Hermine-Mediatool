@@ -2,18 +2,43 @@ version: '3.8'
 
 services:
   hermine-downloader:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: hermine-downloader
     volumes:
-      - ./downloads:/app/downloads
-      - ./logs:/app/logs
+      - downloads:/app/downloads
+      - logs:/app/logs
       - ./.env:/app/.env:ro
     environment:
-      LOG_LEVEL: INFO
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PYTHONUNBUFFERED: 1
     restart: unless-stopped
     networks:
-      - default
+      - hermine-net
+    # Container Healthcheck
+    healthcheck:
+      test: ["CMD", "test", "-f", "/app/downloads/manifest.db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    # Resource Limits (optional, kann angepasst werden)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+networks:
+  hermine-net:
+    driver: bridge
 
 volumes:
   downloads:
+    driver: local
   logs:
+    driver: local
