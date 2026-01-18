@@ -42,7 +42,7 @@ services:
     container_name: hermine-web
     volumes:
       - downloads:/downloads:ro
-      - data:/data:ro
+      - data:/data  # Read-write access needed for database operations
     environment:
       WEB_HOST: "0.0.0.0"
       WEB_PORT: "8080"

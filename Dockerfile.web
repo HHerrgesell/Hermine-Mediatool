@@ -17,11 +17,14 @@ RUN pip install --no-cache-dir -r requirements.txt -r requirements-web.txt
 # Copy application code
 COPY src/ ./src/
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /app
+# Create non-root user with same UID/GID as downloader for consistent permissions
+ARG UID=1000
+ARG GID=1000
+RUN groupadd -g ${GID} hermine && \
+    useradd -u ${UID} -g ${GID} -m -s /bin/bash hermine && \
+    chown -R hermine:hermine /app
 
-USER appuser
+USER hermine
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -36,7 +39,7 @@ EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/stats')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${WEB_PORT}/api/stats')" || exit 1
 
 # Run the web server
 CMD ["python", "-m", "src.web.app"]
