@@ -147,12 +147,16 @@ class EXIFHandler:
             import piexif
             from PIL import Image as PILImage
 
-            image = PILImage.open(file_path)
+            # Convert Path to string for piexif compatibility
+            file_path_str = str(file_path)
+            output_path_str = str(output_path)
+
+            image = PILImage.open(file_path_str)
 
             # Try to load existing EXIF data
             try:
-                exif_dict = piexif.load(file_path)
-            except (piexif.InvalidImageDataError, AttributeError):
+                exif_dict = piexif.load(file_path_str)
+            except (piexif.InvalidImageDataError, AttributeError, KeyError):
                 # No EXIF data exists, create new
                 exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
 
@@ -163,9 +167,9 @@ class EXIFHandler:
 
             # Save image with updated EXIF
             exif_bytes = piexif.dump(exif_dict)
-            image.save(output_path, exif=exif_bytes, quality=95)
+            image.save(output_path_str, exif=exif_bytes, quality=95)
 
-            logger.debug(f"✓ Author gesetzt: {author} in {file_path.name}")
+            logger.info(f"✓ Author gesetzt: {author} in {file_path.name}")
             return True
 
         except ImportError:
@@ -240,67 +244,72 @@ class EXIFHandler:
 
     def sanitize_exif(self, file_path: Path, output_path: Optional[Path] = None) -> bool:
         """Remove sensitive EXIF data from image file.
-        
+
         Keeps useful metadata (date, camera model) but removes:
         - GPS coordinates
         - Camera serial number
         - Software version
         - Copyright info
         - User comments
-        
+
+        Note: Author/Artist field (315) is preserved for attribution.
+
         Args:
             file_path: Path to source image
             output_path: Path to save sanitized image
-            
+
         Returns:
             True if successful, False otherwise
         """
         if not self.pil_available:
             return False
-        
+
         if output_path is None:
             output_path = file_path
 
         try:
             from PIL import Image as PILImage
             import piexif
-            
-            image = PILImage.open(file_path)
-            
+
+            # Convert Path to string for piexif compatibility
+            file_path_str = str(file_path)
+            output_path_str = str(output_path)
+
+            image = PILImage.open(file_path_str)
+
             # Get EXIF data
             try:
-                exif_dict = piexif.load(file_path)
-            except (piexif.InvalidImageDataError, AttributeError):
+                exif_dict = piexif.load(file_path_str)
+            except (piexif.InvalidImageDataError, AttributeError, KeyError):
                 # No EXIF data, just save
-                image.save(output_path, quality=95)
+                image.save(output_path_str, quality=95)
                 return True
-            
+
             # Sensitive fields to remove
             # Note: 315 (Artist/Author) is intentionally NOT removed - we preserve it for attribution
             sensitive_fields = {
-                '0th': [36867, 36868, 271, 272, 305, 306, 33432],  # DateTime, Make, Model, Software, Copyright (NOT Artist/315)
-                'Exif': [36867, 36868, 37510, 37521, 37522, 41729, 41730, 42016, 42017],  # GPS, Serial, etc.
+                '0th': [271, 272, 305, 306, 33432],  # Make, Model, Software, DateTime, Copyright (NOT Artist/315)
+                'Exif': [37510, 37521, 37522, 42016, 42017],  # UserComment, SerialNumber, etc.
                 '1st': [],
-                'GPS': [0, 1, 2, 3, 4]  # All GPS tags
             }
-            
-            # Remove sensitive IFDs
+
+            # Remove GPS data entirely
             if 'GPS' in exif_dict:
-                del exif_dict['GPS']
-            
-            # Sanitize other IFDs
+                exif_dict['GPS'] = {}
+
+            # Sanitize other IFDs - remove sensitive fields but keep Author
             for ifd_name in ['0th', 'Exif', '1st']:
-                if ifd_name in exif_dict:
+                if ifd_name in exif_dict and isinstance(exif_dict[ifd_name], dict):
                     for field_id in sensitive_fields.get(ifd_name, []):
                         if field_id in exif_dict[ifd_name]:
                             del exif_dict[ifd_name][field_id]
-            
+
             # Save sanitized image
             exif_bytes = piexif.dump(exif_dict)
-            image.save(output_path, exif=exif_bytes, quality=95)
+            image.save(output_path_str, exif=exif_bytes, quality=95)
             logger.debug(f"✓ EXIF-Daten bereinigt: {file_path.name}")
             return True
-            
+
         except ImportError:
             logger.warning("piexif nicht installiert - vollständiges Sanitizing nicht möglich")
             return self.remove_exif(file_path, output_path)
