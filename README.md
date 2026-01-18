@@ -12,6 +12,7 @@ Automatisiertes Skript zum vollständigen Download aller Bilder und Videos aus H
 - Fehlertolerante Implementierung mit Exponential-Backoff Retry-Logik
 - SQLite-Manifest für Download-Tracking und Statistiken
 - Asynchrone/parallele Downloads für optimale Performance
+- **Unterstützung für verschlüsselte Kanäle** mit RSA-Entschlüsselung
 
 🔗 **Integration:**
 - Hermine API-Support (automatische Versions-Erkennung)
@@ -87,6 +88,16 @@ RETRY_ATTEMPTS=3
 LOG_LEVEL=INFO
 ```
 
+### Verschlüsselte Kanäle
+
+Für verschlüsselte Hermine-Kanäle wird ein RSA-Schlüssel benötigt:
+
+```bash
+HERMINE_ENCRYPTION_KEY=your_rsa_passphrase
+```
+
+Dieser Schlüssel wird verwendet, um verschlüsselte Medien-Dateien zu entschlüsseln. Das Crypto-Modul behandelt die RSA-Entschlüsselung automatisch, wenn verschlüsselte Dateien erkannt werden.
+
 ### Pfad-Templates
 
 Standard-Template: `{year}/{month:02d}/{sender}_{filename}`
@@ -107,6 +118,22 @@ Beispiele:
 ```
 
 ## Verwendung
+
+### CLI-Befehle - Vollständige Liste
+
+```bash
+# 1. Kanäle auflisten
+python3 -m src.cli list-channels
+
+# 2. Absender in einem Kanal anzeigen
+python3 -m src.cli list-senders CHANNEL_ID
+
+# 3. Download-Statistiken anzeigen
+python3 -m src.cli stats [--channel CHANNEL_ID]
+
+# 4. Pfad-Template Hilfe anzeigen
+python3 -m src.cli show-template-help
+```
 
 ### Kanal-IDs finden
 
@@ -166,6 +193,8 @@ Ausgabe:
 ```bash
 python3 -m src.cli show-template-help
 ```
+
+Zeigt detaillierte Informationen über verfügbare Template-Platzhalter und Formatierungsoptionen.
 
 ### Einfacher Download aller konfigurierter Kanäle
 
@@ -320,6 +349,13 @@ NEXTCLOUD_AUTO_UPLOAD=true
 DELETE_LOCAL_AFTER_UPLOAD=true
 ```
 
+### Verschlüsselte Dateien können nicht entschlüsselt werden
+
+Stelle sicher, dass der ENCRYPTION_KEY korrekt konfiguriert ist:
+```bash
+HERMINE_ENCRYPTION_KEY=your_rsa_passphrase
+```
+
 ## Projektstruktur
 
 ```
@@ -338,6 +374,9 @@ Hermine-Mediatool/
 │   ├── cli/
 │   │   ├── __init__.py
 │   │   └── commands.py           # CLI-Befehle
+│   ├── crypto/
+│   │   ├── __init__.py
+│   │   └── encryption.py         # RSA-Entschlüsselung
 │   ├── storage/
 │   │   ├── __init__.py
 │   │   ├── database.py           # SQLite Manifest
@@ -386,6 +425,6 @@ Für Bugs und Fragen: [Issues](https://github.com/HHerrgesell/Hermine-Mediatool/
 
 ---
 
-**Version:** 1.1.0  
-**Zuletzt aktualisiert:** 2026-01-16  
+**Version:** 1.2.0  
+**Zuletzt aktualisiert:** 2026-01-18  
 **Status:** Production Ready ✅
