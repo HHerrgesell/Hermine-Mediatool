@@ -2,12 +2,13 @@ version: '3.8'
 
 services:
   hermine-downloader:
-    build: 
+    build:
       context: .
       dockerfile: Dockerfile
     container_name: hermine-downloader
     volumes:
       - downloads:/app/downloads
+      - data:/app/data
       - logs:/app/logs
       - ./.env:/app/.env:ro
     environment:
@@ -18,7 +19,7 @@ services:
       - hermine-net
     # Container Healthcheck
     healthcheck:
-      test: ["CMD", "test", "-f", "/app/downloads/manifest.db"]
+      test: ["CMD", "test", "-f", "/app/data/manifest.db"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -33,12 +34,52 @@ services:
           cpus: '1'
           memory: 512M
 
+  # Web UI Service
+  hermine-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: hermine-web
+    volumes:
+      - downloads:/downloads:ro
+      - data:/data:ro
+    environment:
+      WEB_HOST: "0.0.0.0"
+      WEB_PORT: "8080"
+      DB_PATH: /data/manifest.db
+      DOWNLOAD_DIR: /downloads
+      PYTHONUNBUFFERED: 1
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    restart: unless-stopped
+    networks:
+      - hermine-net
+    depends_on:
+      hermine-downloader:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/stats')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
 networks:
   hermine-net:
     driver: bridge
 
 volumes:
   downloads:
+    driver: local
+  data:
     driver: local
   logs:
     driver: local

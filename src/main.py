@@ -32,7 +32,7 @@ async def main():
         config.validate()
 
         # Initialisiere Datenbank
-        db = ManifestDB(config.storage.base_dir / "manifest.db")
+        db = ManifestDB(config.storage.data_dir / "manifest.db")
         db.initialize()
 
         # Hermine Client

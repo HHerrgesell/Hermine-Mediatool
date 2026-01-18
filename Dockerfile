@@ -19,8 +19,12 @@ COPY .env.example /app/
 # Create empty .env if it doesn't exist (for development/testing)
 RUN test -f /app/.env || echo "# Configuration - see .env.example" > /app/.env
 
-# Logs und Downloads als Volumes
-VOLUME ["/app/downloads", "/app/logs"]
+# Downloads, Data and Logs als Volumes
+VOLUME ["/app/downloads", "/app/data", "/app/logs"]
+
+# Default environment variables
+ENV DATA_DIR=/app/data \
+    DOWNLOAD_DIR=/app/downloads
 
 # Run
 CMD ["python3", "-m", "src.main"]
