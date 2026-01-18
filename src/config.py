@@ -15,6 +15,12 @@ class HermineConfig:
     encryption_key: str  # Passphrase for RSA private key
     timeout: int = 30
     verify_ssl: bool = True
+    # Domains for file hosting and app access
+    app_domain: str = "https://app.thw-messenger.de"
+    file_domain: str = "https://app.thw-messenger.de/thw/app.thw-messenger.de"
+    # User-Agent and App Name for API calls
+    user_agent: str = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Mobile Safari/537.36"
+    app_name: str = "hermine@thw-Chrome:97.0.4692.99-browser-4.11.1"
 
 
 @dataclass
@@ -92,7 +98,15 @@ class Config:
             password=os.getenv('HERMINE_PASSWORD', ''),
             encryption_key=os.getenv('HERMINE_ENCRYPTION_KEY', ''),
             timeout=int(os.getenv('HERMINE_TIMEOUT', '30')),
-            verify_ssl=os.getenv('HERMINE_VERIFY_SSL', 'true').lower() == 'true'
+            verify_ssl=os.getenv('HERMINE_VERIFY_SSL', 'true').lower() == 'true',
+            # Configurable domains (with defaults for THW Messenger)
+            app_domain=os.getenv('HERMINE_APP_DOMAIN', 'https://app.thw-messenger.de'),
+            file_domain=os.getenv('HERMINE_FILE_DOMAIN', 'https://app.thw-messenger.de/thw/app.thw-messenger.de'),
+            # Configurable User-Agent and App Name
+            user_agent=os.getenv('HERMINE_USER_AGENT', 
+                'Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 '
+                '(KHTML, like Gecko) Chrome/97.0.4692.99 Mobile Safari/537.36'),
+            app_name=os.getenv('HERMINE_APP_NAME', 'hermine@thw-Chrome:97.0.4692.99-browser-4.11.1')
         )
 
         # Download Configuration

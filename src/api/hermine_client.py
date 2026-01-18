@@ -43,13 +43,33 @@ class HermineClient:
     SESSION_CACHE_DAYS = 7
 
     def __init__(self, base_url: str, username: str, password: str,
-                 timeout: int = 30, verify_ssl: bool = True):
-        """Initialize Hermine client"""
+                 timeout: int = 30, verify_ssl: bool = True,
+                 app_domain: str = "https://app.thw-messenger.de",
+                 file_domain: str = "https://app.thw-messenger.de/thw/app.thw-messenger.de",
+                 user_agent: str = "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Mobile Safari/537.36",
+                 app_name: str = "hermine@thw-Chrome:97.0.4692.99-browser-4.11.1"):
+        """Initialize Hermine client
+        
+        Args:
+            base_url: Base URL for Hermine API
+            username: Username for authentication
+            password: Password for authentication
+            timeout: Request timeout in seconds
+            verify_ssl: Whether to verify SSL certificates
+            app_domain: Domain for app resources (Origin/Referer headers)
+            file_domain: Domain pattern for file downloads
+            user_agent: User-Agent string for requests
+            app_name: App identifier for authentication
+        """
         self.base_url = base_url.rstrip('/')
         self.username = username
         self.password = password
         self.timeout = timeout
         self.verify_ssl = verify_ssl
+        self.app_domain = app_domain.rstrip('/')
+        self.file_domain = file_domain.rstrip('/')
+        self.user_agent = user_agent
+        self.app_name = app_name
         self.session = requests.Session()
 
         # Try to load cached session
@@ -80,8 +100,7 @@ class HermineClient:
             "Accept-Language": "en-US,en;q=0.5",
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "User-Agent": "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) AppleWebKit/537.36 ("
-                          "KHTML, like Gecko) Chrome/97.0.4692.99 Mobile Safari/537.36",
+            "User-Agent": self.user_agent,
         })
 
         # Authenticate (will use cached session or create new one)
@@ -171,7 +190,7 @@ class HermineClient:
             data = self._post("auth/login", {
                 "email": self.username,
                 "password": self.password,
-                "app_name": "hermine@thw-Chrome:97.0.4692.99-browser-4.11.1",
+                "app_name": self.app_name,
                 "encrypted": True,
                 "callable": True,
             }, include_auth=False)
@@ -329,13 +348,12 @@ class HermineClient:
                             mime_type = file_info.get("mime", "")
                             logger.debug(f"File: {file_info.get('name')}, mime: {mime_type}")
                             if self._is_media_file(mime_type):
-                                # Construct download URL for app.thw-messenger.de
-                                # Pattern from browser: https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}
+                                # Construct download URL using configured file_domain
                                 file_id = file_info.get("id")
                                 filename = file_info.get("name", "")
 
-                                # Files are hosted on app subdomain with this specific path pattern
-                                download_url = f"https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{filename}"
+                                # Use configured file domain pattern
+                                download_url = f"{self.file_domain}/{file_id}/{filename}"
 
                                 logger.debug(f"File ID: {file_id}, filename: {filename}")
                                 logger.debug(f"Download URL: {download_url}")
@@ -426,8 +444,8 @@ class HermineClient:
                     timeout=timeout or self.timeout,
                     verify=self.verify_ssl,
                     headers={
-                        "Origin": "https://app.thw-messenger.de",
-                        "Referer": "https://app.thw-messenger.de/",
+                        "Origin": self.app_domain,
+                        "Referer": f"{self.app_domain}/",
                     }
                 )
 
@@ -707,7 +725,7 @@ class HermineClient:
         if file_name:
             logger.info("\n--- Test 3: Direct URL download ---")
             try:
-                url = f"https://app.thw-messenger.de/thw/app.thw-messenger.de/{file_id}/{file_name}"
+                url = f"{self.file_domain}/{file_id}/{file_name}"
                 response = self.session.get(url, timeout=self.timeout, verify=self.verify_ssl)
                 logger.info(f"Status: {response.status_code}")
                 logger.info(f"Headers: {dict(response.headers)}")
@@ -770,8 +788,8 @@ class HermineClient:
                 timeout=self.timeout,
                 verify=self.verify_ssl,
                 headers={
-                    "Origin": "https://app.thw-messenger.de",
-                    "Referer": "https://app.thw-messenger.de/",
+                    "Origin": self.app_domain,
+                    "Referer": f"{self.app_domain}/",
                 }
             )
             logger.info(f"Status: {response.status_code}")
