@@ -2,6 +2,27 @@
 
 Alle bemerkenswerten Änderungen dieses Projekts werden in dieser Datei dokumentiert.
 
+## [1.2.0] - 2026-01-18
+
+### Dokumentation
+- Vollständige Dokumentation der Verschlüsselungsfunktionalität (HERMINE_ENCRYPTION_KEY)
+- Vollständige Liste aller CLI-Befehle inkl. `show-template-help`
+- Erweiterter Troubleshooting-Bereich für verschlüsselte Dateien
+- Aktualisierte Projektstruktur mit crypto-Modul
+- Verbesserte Dokumentation der Pfad-Templates
+
+### Verbesserungen
+- Verbessertes docker-compose.yml:
+  - Named Volumes für bessere Persistenz
+  - Healthcheck für Container-Monitoring
+  - Resource Limits (CPU/Memory)
+  - Dedicated Network
+  - PYTHONUNBUFFERED für besseres Logging
+
+### Wartung
+- Aktualisierung der Version auf 1.2.0
+- Datum auf 2026-01-18 aktualisiert
+
 ## [1.1.0] - 2026-01-16
 
 ### Hinzugefügt
