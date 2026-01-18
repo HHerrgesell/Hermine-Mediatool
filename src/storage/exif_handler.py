@@ -1,10 +1,13 @@
 """EXIF metadata handling and manipulation."""
 import logging
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+# EXIF tag IDs for Author/Artist field
+EXIF_TAG_ARTIST = 315  # 0x013B - Artist (Author) tag in IFD0
 
 
 class EXIFHandler:
@@ -63,10 +66,10 @@ class EXIFHandler:
 
     def get_creation_datetime(self, file_path: Path) -> Optional[datetime]:
         """Extract creation datetime from EXIF data.
-        
+
         Args:
             file_path: Path to image file
-            
+
         Returns:
             Datetime object or None
         """
@@ -77,7 +80,7 @@ class EXIFHandler:
             exif_data = self.extract_exif(file_path)
             if not exif_data:
                 return None
-            
+
             # Try different EXIF datetime fields
             for field in ['DateTime', 'DateTimeOriginal', 'DateTimeDigitized']:
                 if field in exif_data:
@@ -86,12 +89,121 @@ class EXIFHandler:
                         return datetime.strptime(dt_str, '%Y:%m:%d %H:%M:%S')
                     except (ValueError, TypeError):
                         continue
-            
+
             return None
-            
+
         except Exception as e:
             logger.debug(f"Fehler beim Extrahieren der Datetime: {e}")
             return None
+
+    def get_author(self, file_path: Path) -> Optional[str]:
+        """Extract Author/Artist from EXIF data.
+
+        Args:
+            file_path: Path to image file
+
+        Returns:
+            Author string or None if not set
+        """
+        if not self.pil_available:
+            return None
+
+        try:
+            exif_data = self.extract_exif(file_path)
+            if not exif_data:
+                return None
+
+            # Check for Artist field (which is the Author in EXIF)
+            author = exif_data.get('Artist')
+            if author and isinstance(author, (str, bytes)):
+                author_str = author.decode('utf-8') if isinstance(author, bytes) else author
+                if author_str.strip():
+                    return author_str.strip()
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Fehler beim Extrahieren des Autors: {e}")
+            return None
+
+    def set_author(self, file_path: Path, author: str, output_path: Optional[Path] = None) -> bool:
+        """Set Author/Artist field in EXIF data.
+
+        Args:
+            file_path: Path to source image
+            author: Author name to set
+            output_path: Path to save modified image (default: overwrite original)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.pil_available:
+            return False
+
+        if output_path is None:
+            output_path = file_path
+
+        try:
+            import piexif
+            from PIL import Image as PILImage
+
+            image = PILImage.open(file_path)
+
+            # Try to load existing EXIF data
+            try:
+                exif_dict = piexif.load(file_path)
+            except (piexif.InvalidImageDataError, AttributeError):
+                # No EXIF data exists, create new
+                exif_dict = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+
+            # Set Author/Artist field (tag 315 = 0x013B)
+            # EXIF Artist field expects bytes
+            author_bytes = author.encode('utf-8')
+            exif_dict['0th'][EXIF_TAG_ARTIST] = author_bytes
+
+            # Save image with updated EXIF
+            exif_bytes = piexif.dump(exif_dict)
+            image.save(output_path, exif=exif_bytes, quality=95)
+
+            logger.debug(f"✓ Author gesetzt: {author} in {file_path.name}")
+            return True
+
+        except ImportError:
+            logger.warning("piexif nicht installiert - Author kann nicht gesetzt werden")
+            return False
+        except Exception as e:
+            logger.warning(f"Fehler beim Setzen des Authors: {e}")
+            return False
+
+    def ensure_author(self, file_path: Path, author: str, output_path: Optional[Path] = None) -> Tuple[bool, bool]:
+        """Check if Author exists in EXIF, set it if not.
+
+        Args:
+            file_path: Path to image file
+            author: Author name to set if not present
+            output_path: Path to save modified image (default: overwrite original)
+
+        Returns:
+            Tuple of (success, was_modified):
+            - success: True if operation completed without errors
+            - was_modified: True if Author was added (was missing)
+        """
+        try:
+            existing_author = self.get_author(file_path)
+
+            if existing_author:
+                logger.debug(f"Author bereits vorhanden: {existing_author} in {file_path.name}")
+                return (True, False)
+
+            # Author not set, add it
+            success = self.set_author(file_path, author, output_path)
+            if success:
+                logger.info(f"✓ Author hinzugefügt: {author} → {file_path.name}")
+            return (success, success)
+
+        except Exception as e:
+            logger.warning(f"Fehler bei ensure_author: {e}")
+            return (False, False)
 
     def remove_exif(self, file_path: Path, output_path: Optional[Path] = None) -> bool:
         """Remove all EXIF data from image file.
@@ -164,8 +276,9 @@ class EXIFHandler:
                 return True
             
             # Sensitive fields to remove
+            # Note: 315 (Artist/Author) is intentionally NOT removed - we preserve it for attribution
             sensitive_fields = {
-                '0th': [36867, 36868, 271, 272, 305, 306, 315, 33432],  # DateTime, Make, Model, Software, etc.
+                '0th': [36867, 36868, 271, 272, 305, 306, 33432],  # DateTime, Make, Model, Software, Copyright (NOT Artist/315)
                 'Exif': [36867, 36868, 37510, 37521, 37522, 41729, 41730, 42016, 42017],  # GPS, Serial, etc.
                 '1st': [],
                 'GPS': [0, 1, 2, 3, 4]  # All GPS tags

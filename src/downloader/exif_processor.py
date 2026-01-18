@@ -24,13 +24,15 @@ class EXIFProcessor:
             remove_sensitive=True
         )
 
-    def process_file(self, file_path: Path, preserve_timestamp: bool = True) -> bool:
+    def process_file(self, file_path: Path, preserve_timestamp: bool = True,
+                     sender_name: Optional[str] = None) -> bool:
         """Process EXIF data in downloaded file.
-        
+
         Args:
             file_path: Path to downloaded file
             preserve_timestamp: Extract and preserve creation timestamp
-            
+            sender_name: Uploader's full name to set as Author if not present
+
         Returns:
             True if successful or not applicable, False on error
         """
@@ -38,30 +40,36 @@ class EXIFProcessor:
             # Only process image files
             if not self._is_image(file_path):
                 return True
-            
+
             logger.debug(f"Processing EXIF for: {file_path.name}")
-            
+
             # Extract metadata before processing
             exif_data = self.exif_handler.extract_exif(file_path)
             creation_dt = None
-            
+
             if preserve_timestamp and exif_data:
                 creation_dt = self.exif_handler.get_creation_datetime(file_path)
-            
-            # Remove sensitive data
+
+            # Check and set Author field from sender_name if not present
+            if sender_name:
+                success, was_modified = self.exif_handler.ensure_author(file_path, sender_name)
+                if was_modified:
+                    logger.debug(f"✓ Author set to: {sender_name}")
+
+            # Remove sensitive data (but keep Author!)
             if self.config.storage.extract_metadata:
                 success = self.exif_handler.sanitize_exif(file_path)
                 if success:
                     logger.debug(f"✓ EXIF sanitized: {file_path.name}")
                 else:
                     logger.debug(f"Could not sanitize EXIF: {file_path.name}")
-            
+
             # Restore timestamp if needed
             if preserve_timestamp and creation_dt:
                 self._restore_timestamp(file_path, creation_dt)
-            
+
             return True
-            
+
         except Exception as e:
             logger.error(f"Error processing EXIF: {e}")
             return False

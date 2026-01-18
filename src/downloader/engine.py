@@ -10,6 +10,8 @@ from src.config import Config
 from src.api.hermine_client import HermineClient, MediaFile
 from src.api.nextcloud_client import NextcloudClient
 from src.storage.database import ManifestDB
+from src.storage.path_builder import PathBuilder
+from src.downloader.exif_processor import EXIFProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ class DownloadEngine:
         self.nextcloud = nextcloud
         self.semaphore = asyncio.Semaphore(config.download.max_concurrent_downloads)
         self.stats = {'downloaded': 0, 'skipped': 0, 'errors': 0, 'total_size': 0}
+        self.exif_processor = EXIFProcessor(config)
 
     async def process_channel(self, channel_id: str) -> Dict[str, Any]:
         """Process all media files in a channel"""
@@ -74,7 +77,7 @@ class DownloadEngine:
     async def _download_file_safe(self, media_file: MediaFile) -> Dict[str, Any]:
         """Download file with error handling"""
         result = {'downloaded': 0, 'errors': 0, 'total_size': 0}
-        
+
         async with self.semaphore:
             retry_count = 0
             while retry_count < self.config.download.retry_attempts:
@@ -85,31 +88,41 @@ class DownloadEngine:
                         media_file,
                         timeout=self.config.download.download_timeout
                     )
-                    
+
                     # Save locally
                     local_path = self._get_local_path(media_file)
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     local_path.write_bytes(file_data)
-                    
+
+                    # Process EXIF data - check/set Author from sender name
+                    if self.config.storage.extract_metadata:
+                        self.exif_processor.process_file(
+                            local_path,
+                            preserve_timestamp=True,
+                            sender_name=media_file.sender_name
+                        )
+
                     # Calculate hash
                     file_hash = hashlib.sha256(file_data).hexdigest() if self.config.storage.calculate_checksums else None
                     file_size = len(file_data)
-                    
-                    # Upload to Nextcloud (optional)
+
+                    # Upload to Nextcloud (optional) - use templated path
                     nc_path = None
                     if self.nextcloud and self.config.nextcloud.auto_upload:
                         try:
+                            # Build templated remote path (same structure as local)
+                            nc_remote_path = self._get_templated_path(media_file)
                             nc_path = await self.nextcloud.upload_file(
                                 local_path,
-                                media_file.filename
+                                nc_remote_path
                             )
-                            
+
                             if self.config.nextcloud.delete_local_after_upload:
                                 local_path.unlink()
                                 logger.debug(f"🗑️  Lokale Datei gelöscht: {media_file.filename}")
                         except Exception as e:
                             logger.warning(f"⚠️  Nextcloud Upload fehlgeschlagen: {e}")
-                    
+
                     # Update database
                     self.db.insert_file(
                         file_id=media_file.file_id,
@@ -123,12 +136,12 @@ class DownloadEngine:
                         local_path=str(local_path) if not (self.nextcloud and self.config.nextcloud.delete_local_after_upload) else None,
                         nextcloud_path=nc_path
                     )
-                    
+
                     logger.info(f"✓ {media_file.filename} ({file_size / 1024 / 1024:.2f} MB)")
                     result['downloaded'] = 1
                     result['total_size'] = file_size
                     return result
-                    
+
                 except Exception as e:
                     retry_count += 1
                     if retry_count < self.config.download.retry_attempts:
@@ -140,25 +153,59 @@ class DownloadEngine:
                         self.db.record_error(media_file.file_id, str(e))
                         result['errors'] = 1
                         return result
-        
+
         result['errors'] = 1
         return result
 
     def _get_local_path(self, media_file: MediaFile) -> Path:
         """Determine local file path based on configuration"""
-        base = self.config.storage.base_dir
-        
-        if self.config.storage.organize_by_channel:
-            base = base / media_file.channel_id
-        
-        if self.config.storage.organize_by_date:
-            date_str = datetime.fromtimestamp(int(media_file.timestamp) if media_file.timestamp.isdigit() else 0).strftime("%Y-%m-%d")
-            base = base / date_str
-        
-        if self.config.storage.organize_by_sender:
-            base = base / media_file.sender_name
-        
-        return base / media_file.filename
+        # Use PathBuilder with the configured template
+        timestamp = None
+        if media_file.timestamp and media_file.timestamp.isdigit():
+            timestamp = datetime.fromtimestamp(int(media_file.timestamp))
+
+        return PathBuilder.build_path(
+            base_dir=self.config.storage.base_dir,
+            template=self.config.storage.path_template,
+            filename=media_file.filename,
+            sender_name=media_file.sender_name,
+            channel_name=media_file.channel_id,  # Could be enhanced to use channel name
+            timestamp=timestamp
+        )
+
+    def _get_templated_path(self, media_file: MediaFile) -> str:
+        """Get templated relative path for uploads (e.g., Nextcloud).
+
+        Returns the path using the configured template without the base directory.
+        """
+        timestamp = None
+        if media_file.timestamp and media_file.timestamp.isdigit():
+            timestamp = datetime.fromtimestamp(int(media_file.timestamp))
+        else:
+            timestamp = datetime.now()
+
+        # Sanitize components
+        sender_safe = PathBuilder._sanitize_name(media_file.sender_name or 'Unknown')
+        channel_safe = PathBuilder._sanitize_name(media_file.channel_id or 'Unknown')
+        filename_safe = PathBuilder._sanitize_filename(media_file.filename)
+
+        # Replace template placeholders
+        path_str = self.config.storage.path_template
+        replacements = {
+            'year': str(timestamp.year),
+            'month': str(timestamp.month),
+            'month:02d': f"{timestamp.month:02d}",
+            'day': str(timestamp.day),
+            'day:02d': f"{timestamp.day:02d}",
+            'sender': sender_safe,
+            'filename': filename_safe,
+            'channel_name': channel_safe
+        }
+
+        for placeholder, value in replacements.items():
+            path_str = path_str.replace('{' + placeholder + '}', value)
+
+        return path_str
 
     def print_statistics(self) -> None:
         """Print download statistics"""
