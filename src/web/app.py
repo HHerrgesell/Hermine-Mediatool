@@ -127,6 +127,8 @@ async def get_stats():
         "channels": stats.get("channels", 0),
         "senders": stats.get("senders", 0),
         "errors": stats.get("errors", 0),
+        "pending_uploads": stats.get("pending_uploads", 0),
+        "corrupted_files": stats.get("corrupted_files", 0),
         "files_by_channel": files_by_channel,
         "top_senders": [{"name": s[0], "count": s[1]} for s in top_senders]
     }
@@ -138,7 +140,8 @@ async def list_files(
     per_page: int = Query(default=25, ge=1, le=100),
     search: Optional[str] = Query(default=None, max_length=100),
     channel_id: Optional[str] = Query(default=None, max_length=100),
-    sender: Optional[str] = Query(default=None, max_length=100)
+    sender: Optional[str] = Query(default=None, max_length=100),
+    status: Optional[str] = Query(default=None, max_length=20)
 ):
     """List all files with pagination and filtering."""
     if not db:
@@ -146,6 +149,9 @@ async def list_files(
 
     # Sanitize inputs
     params = SearchParams(search=search, channel_id=channel_id, sender=sender)
+    # Validate status filter
+    valid_statuses = {'completed', 'corrupted', 'upload_pending', 'upload_failed'}
+    status_filter = status if status in valid_statuses else None
 
     offset = (page - 1) * per_page
     files = db.get_all_files(
@@ -153,13 +159,15 @@ async def list_files(
         offset=offset,
         search=params.search,
         channel_id=params.channel_id,
-        sender=params.sender
+        sender=params.sender,
+        status=status_filter
     )
 
     total = db.count_files(
         search=params.search,
         channel_id=params.channel_id,
-        sender=params.sender
+        sender=params.sender,
+        status=status_filter
     )
 
     # Format file data for frontend
@@ -177,6 +185,7 @@ async def list_files(
             "download_timestamp": f.get("download_timestamp"),
             "local_path": f.get("local_path"),
             "nextcloud_path": f.get("nextcloud_path"),
+            "status": f.get("status", "completed"),
             "has_local_file": bool(f.get("local_path") and Path(f.get("local_path")).exists())
         })
 
@@ -294,6 +303,84 @@ async def remove_from_database(file_id: str):
         "success": deleted,
         "file_id": validated.file_id,
         "message": "Removed from database - file will be re-downloaded on next sync" if deleted else "Failed to remove from database"
+    }
+
+
+@app.post("/api/files/{file_id}/mark-corrupted")
+async def mark_file_corrupted(file_id: str):
+    """Mark a file as corrupted. Next downloader run will re-download it."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        validated = FileIdParam(file_id=file_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    file = db.get_file_by_id(validated.file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    success = db.mark_corrupted(validated.file_id)
+    return {
+        "success": success,
+        "file_id": validated.file_id,
+        "message": "Als korrupt markiert – wird beim nächsten Sync neu heruntergeladen" if success else "Markierung fehlgeschlagen"
+    }
+
+
+@app.post("/api/files/{file_id}/mark-upload-pending")
+async def mark_file_upload_pending(file_id: str):
+    """Mark a file for re-upload to Nextcloud on next downloader run."""
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    try:
+        validated = FileIdParam(file_id=file_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    file = db.get_file_by_id(validated.file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    success = db.mark_upload_pending(validated.file_id)
+    return {
+        "success": success,
+        "file_id": validated.file_id,
+        "message": "Für Re-Upload vorgemerkt" if success else "Markierung fehlgeschlagen"
+    }
+
+
+@app.post("/api/files/mass-revalidate")
+async def mass_revalidate(
+    channel_id: Optional[str] = Query(default=None, max_length=100),
+    sender: Optional[str] = Query(default=None, max_length=100)
+):
+    """Mark all matching files as corrupted for mass re-download/revalidation.
+
+    All marked files will be re-downloaded and revalidated on the next downloader run.
+    """
+    if not db:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    # Sanitize inputs
+    params = SearchParams(channel_id=channel_id, sender=sender)
+    count = db.mark_all_for_revalidation(
+        channel_id=params.channel_id,
+        sender=params.sender
+    )
+
+    filter_desc = ""
+    if params.channel_id:
+        filter_desc += f" in Kanal {params.channel_id}"
+    if params.sender:
+        filter_desc += f" von {params.sender}"
+
+    return {
+        "success": count > 0,
+        "count": count,
+        "message": f"{count} Dateien{filter_desc} für Revalidierung markiert"
     }
 
 

@@ -97,14 +97,14 @@
                     </div>
                     <div class="bg-white rounded-lg shadow p-6">
                         <div class="flex items-center">
-                            <div class="flex-shrink-0 bg-purple-100 rounded-lg p-3">
-                                <svg class="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"></path>
+                            <div class="flex-shrink-0 bg-yellow-100 rounded-lg p-3">
+                                <svg class="w-6 h-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
                                 </svg>
                             </div>
                             <div class="ml-4">
-                                <p class="text-sm font-medium text-gray-500">Absender</p>
-                                <p id="stat-senders" class="text-2xl font-semibold text-gray-900">-</p>
+                                <p class="text-sm font-medium text-gray-500">Korrupt / Ausstehend</p>
+                                <p id="stat-pending" class="text-2xl font-semibold text-gray-900">-</p>
                             </div>
                         </div>
                     </div>
@@ -150,9 +150,9 @@
 
             <!-- Files Tab -->
             <div id="content-files" class="hidden fade-in">
-                <!-- Search and Filters -->
+                <!-- Search, Filters and Mass Actions -->
                 <div class="bg-white rounded-lg shadow mb-6 p-4">
-                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-5 gap-4">
                         <div class="md:col-span-2">
                             <label for="search" class="sr-only">Suchen</label>
                             <div class="relative">
@@ -174,6 +174,25 @@
                                 <option value="">Alle Absender</option>
                             </select>
                         </div>
+                        <div>
+                            <select id="filter-status" class="block w-full py-2 px-3 border border-gray-300 bg-white rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                                <option value="">Alle Status</option>
+                                <option value="completed">Abgeschlossen</option>
+                                <option value="corrupted">Korrupt</option>
+                                <option value="upload_pending">Upload ausstehend</option>
+                                <option value="upload_failed">Upload fehlgeschlagen</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- Mass Actions Bar -->
+                    <div class="mt-4 pt-4 border-t border-gray-200 flex items-center gap-3">
+                        <span class="text-sm text-gray-500">Massenaktionen:</span>
+                        <button onclick="showMassRevalidateModal()" class="inline-flex items-center px-3 py-1.5 border border-yellow-300 text-sm font-medium rounded-md text-yellow-700 bg-yellow-50 hover:bg-yellow-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500">
+                            <svg class="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            Alle revalidieren
+                        </button>
                     </div>
                 </div>
 
@@ -233,8 +252,8 @@
         </main>
     </div>
 
-    <!-- Delete Confirmation Modal -->
-    <div id="delete-modal" class="fixed z-10 inset-0 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
+    <!-- Action Modal (Delete / Mark Corrupted / Re-Upload) -->
+    <div id="action-modal" class="fixed z-10 inset-0 overflow-y-auto hidden" aria-labelledby="modal-title" role="dialog" aria-modal="true">
         <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeModal()"></div>
             <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
@@ -246,21 +265,65 @@
                         </svg>
                     </div>
                     <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
-                        <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">Datei löschen</h3>
+                        <h3 class="text-lg leading-6 font-medium text-gray-900" id="modal-title">Datei-Aktionen</h3>
                         <div class="mt-2">
-                            <p class="text-sm text-gray-500" id="modal-message">Möchten Sie diese Datei wirklich löschen?</p>
+                            <p class="text-sm text-gray-500" id="modal-message">Wählen Sie eine Aktion für diese Datei:</p>
                             <p class="text-sm font-medium text-gray-700 mt-2" id="modal-filename"></p>
                         </div>
                     </div>
                 </div>
+                <div class="mt-5 sm:mt-4 flex flex-col gap-2">
+                    <button type="button" onclick="confirmMarkCorrupted()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-yellow-600 text-base font-medium text-white hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 sm:text-sm">
+                        Als korrupt markieren (Re-Download)
+                    </button>
+                    <button type="button" onclick="confirmMarkUploadPending()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-blue-600 text-base font-medium text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:text-sm">
+                        Erneut hochladen (Re-Upload)
+                    </button>
+                    <button type="button" onclick="confirmRedownload()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-orange-600 text-base font-medium text-white hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500 sm:text-sm">
+                        Aus DB entfernen (Re-Download)
+                    </button>
+                    <button type="button" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:text-sm">
+                        Komplett löschen
+                    </button>
+                    <button type="button" onclick="closeModal()" class="w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:text-sm">
+                        Abbrechen
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mass Revalidate Confirmation Modal -->
+    <div id="mass-revalidate-modal" class="fixed z-10 inset-0 overflow-y-auto hidden" role="dialog" aria-modal="true">
+        <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
+            <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" onclick="closeMassRevalidateModal()"></div>
+            <span class="hidden sm:inline-block sm:align-middle sm:h-screen">&#8203;</span>
+            <div class="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6">
+                <div class="sm:flex sm:items-start">
+                    <div class="mx-auto flex-shrink-0 flex items-center justify-center h-12 w-12 rounded-full bg-yellow-100 sm:mx-0 sm:h-10 sm:w-10">
+                        <svg class="h-6 w-6 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                        </svg>
+                    </div>
+                    <div class="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
+                        <h3 class="text-lg leading-6 font-medium text-gray-900">Alle Dateien revalidieren</h3>
+                        <div class="mt-2">
+                            <p class="text-sm text-gray-500">
+                                Alle abgeschlossenen Dateien werden als <strong>korrupt</strong> markiert.
+                                Beim nächsten Downloader-Lauf werden sie neu heruntergeladen und validiert.
+                            </p>
+                            <p class="text-sm text-gray-500 mt-2">
+                                Aktuelle Filter werden berücksichtigt (Kanal/Absender).
+                            </p>
+                            <p class="text-sm font-medium text-red-600 mt-2" id="mass-revalidate-warning"></p>
+                        </div>
+                    </div>
+                </div>
                 <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse gap-3">
-                    <button type="button" id="modal-delete-btn" onclick="confirmDelete()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-red-600 text-base font-medium text-white hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 sm:ml-3 sm:w-auto sm:text-sm">
-                        Löschen
+                    <button type="button" onclick="confirmMassRevalidate()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-yellow-600 text-base font-medium text-white hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 sm:w-auto sm:text-sm">
+                        Ja, alle revalidieren
                     </button>
-                    <button type="button" id="modal-redownload-btn" onclick="confirmRedownload()" class="w-full inline-flex justify-center rounded-md border border-transparent shadow-sm px-4 py-2 bg-yellow-600 text-base font-medium text-white hover:bg-yellow-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500 sm:w-auto sm:text-sm">
-                        Nur aus DB entfernen
-                    </button>
-                    <button type="button" onclick="closeModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 sm:mt-0 sm:w-auto sm:text-sm">
+                    <button type="button" onclick="closeMassRevalidateModal()" class="mt-3 w-full inline-flex justify-center rounded-md border border-gray-300 shadow-sm px-4 py-2 bg-white text-base font-medium text-gray-700 hover:bg-gray-50 sm:mt-0 sm:w-auto sm:text-sm">
                         Abbrechen
                     </button>
                 </div>
@@ -298,14 +361,9 @@
             });
 
             // Filter change handlers
-            document.getElementById('filter-channel').addEventListener('change', () => {
-                currentPage = 1;
-                loadFiles();
-            });
-            document.getElementById('filter-sender').addEventListener('change', () => {
-                currentPage = 1;
-                loadFiles();
-            });
+            document.getElementById('filter-channel').addEventListener('change', () => { currentPage = 1; loadFiles(); });
+            document.getElementById('filter-sender').addEventListener('change', () => { currentPage = 1; loadFiles(); });
+            document.getElementById('filter-status').addEventListener('change', () => { currentPage = 1; loadFiles(); });
         });
 
         // API calls
@@ -336,8 +394,11 @@
                 const stats = await api('/stats');
                 document.getElementById('stat-files').textContent = stats.total_files.toLocaleString();
                 document.getElementById('stat-size').textContent = stats.total_size_formatted;
-                document.getElementById('stat-senders').textContent = stats.senders.toLocaleString();
                 document.getElementById('stat-errors').textContent = stats.errors.toLocaleString();
+
+                // Pending/corrupted combined stat
+                const pendingTotal = (stats.corrupted_files || 0) + (stats.pending_uploads || 0);
+                document.getElementById('stat-pending').textContent = pendingTotal.toLocaleString();
 
                 // Top senders
                 const sendersHtml = stats.top_senders.length > 0
@@ -383,11 +444,32 @@
             }
         }
 
+        // Status badge helper
+        function getStatusBadge(file) {
+            const status = file.status || 'completed';
+            const badges = {
+                'completed': '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">OK</span>',
+                'corrupted': '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">Korrupt</span>',
+                'upload_pending': '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">Upload ausstehend</span>',
+                'upload_failed': '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-orange-100 text-orange-800">Upload fehlgeschlagen</span>',
+            };
+            let badge = badges[status] || badges['completed'];
+
+            if (file.has_local_file) {
+                badge += ' <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-600">Lokal</span>';
+            }
+            if (file.nextcloud_path) {
+                badge += ' <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">Cloud</span>';
+            }
+            return badge;
+        }
+
         // Load files
         async function loadFiles() {
             const search = document.getElementById('search').value;
             const channel = document.getElementById('filter-channel').value;
             const sender = document.getElementById('filter-sender').value;
+            const status = document.getElementById('filter-status').value;
 
             const params = new URLSearchParams({
                 page: currentPage,
@@ -396,6 +478,7 @@
             if (search) params.append('search', search);
             if (channel) params.append('channel_id', channel);
             if (sender) params.append('sender', sender);
+            if (status) params.append('status', status);
 
             try {
                 const data = await api(`/files?${params}`);
@@ -439,18 +522,11 @@
                             ${formatDate(file.download_timestamp)}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            ${file.has_local_file
-                                ? '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">Lokal</span>'
-                                : '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">Nur DB</span>'
-                            }
-                            ${file.nextcloud_path
-                                ? '<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800 ml-1">Cloud</span>'
-                                : ''
-                            }
+                            ${getStatusBadge(file)}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                            <button onclick="showDeleteModal('${escapeHtml(file.file_id)}', '${escapeHtml(file.filename)}')" class="text-red-600 hover:text-red-900">
-                                Löschen
+                            <button onclick="showActionModal('${escapeHtml(file.file_id)}', '${escapeHtml(file.filename)}')" class="text-blue-600 hover:text-blue-900">
+                                Aktionen
                             </button>
                         </td>
                     </tr>
@@ -475,30 +551,45 @@
         }
 
         // Pagination
-        function prevPage() {
-            if (currentPage > 1) {
-                currentPage--;
-                loadFiles();
-            }
-        }
+        function prevPage() { if (currentPage > 1) { currentPage--; loadFiles(); } }
+        function nextPage() { if (currentPage < totalPages) { currentPage++; loadFiles(); } }
 
-        function nextPage() {
-            if (currentPage < totalPages) {
-                currentPage++;
-                loadFiles();
-            }
-        }
-
-        // Delete modal
-        function showDeleteModal(fileId, filename) {
+        // Action modal
+        function showActionModal(fileId, filename) {
             currentFileId = fileId;
             document.getElementById('modal-filename').textContent = filename;
-            document.getElementById('delete-modal').classList.remove('hidden');
+            document.getElementById('action-modal').classList.remove('hidden');
         }
 
         function closeModal() {
-            document.getElementById('delete-modal').classList.add('hidden');
+            document.getElementById('action-modal').classList.add('hidden');
             currentFileId = null;
+        }
+
+        async function confirmMarkCorrupted() {
+            if (!currentFileId) return;
+            try {
+                const result = await api(`/files/${currentFileId}/mark-corrupted`, { method: 'POST' });
+                showToast(result.message);
+                closeModal();
+                loadFiles();
+                loadStats();
+            } catch (error) {
+                showToast('Fehler beim Markieren', 'error');
+            }
+        }
+
+        async function confirmMarkUploadPending() {
+            if (!currentFileId) return;
+            try {
+                const result = await api(`/files/${currentFileId}/mark-upload-pending`, { method: 'POST' });
+                showToast(result.message);
+                closeModal();
+                loadFiles();
+                loadStats();
+            } catch (error) {
+                showToast('Fehler beim Markieren', 'error');
+            }
         }
 
         async function confirmDelete() {
@@ -518,12 +609,49 @@
             if (!currentFileId) return;
             try {
                 await api(`/files/${currentFileId}/db-only`, { method: 'DELETE' });
-                showToast('Aus Datenbank entfernt - wird beim nächsten Sync neu heruntergeladen');
+                showToast('Aus Datenbank entfernt – wird beim nächsten Sync neu heruntergeladen');
                 closeModal();
                 loadFiles();
                 loadStats();
             } catch (error) {
                 showToast('Fehler beim Entfernen aus DB', 'error');
+            }
+        }
+
+        // Mass revalidate
+        function showMassRevalidateModal() {
+            const channel = document.getElementById('filter-channel').value;
+            const sender = document.getElementById('filter-sender').value;
+            let warning = 'Dies betrifft ALLE abgeschlossenen Dateien!';
+            if (channel || sender) {
+                warning = 'Filter aktiv: ';
+                if (channel) warning += `Kanal ${channel} `;
+                if (sender) warning += `Absender ${sender}`;
+            }
+            document.getElementById('mass-revalidate-warning').textContent = warning;
+            document.getElementById('mass-revalidate-modal').classList.remove('hidden');
+        }
+
+        function closeMassRevalidateModal() {
+            document.getElementById('mass-revalidate-modal').classList.add('hidden');
+        }
+
+        async function confirmMassRevalidate() {
+            const channel = document.getElementById('filter-channel').value;
+            const sender = document.getElementById('filter-sender').value;
+
+            const params = new URLSearchParams();
+            if (channel) params.append('channel_id', channel);
+            if (sender) params.append('sender', sender);
+
+            try {
+                const result = await api(`/files/mass-revalidate?${params}`, { method: 'POST' });
+                showToast(result.message);
+                closeMassRevalidateModal();
+                loadFiles();
+                loadStats();
+            } catch (error) {
+                showToast('Fehler bei Massen-Revalidierung', 'error');
             }
         }
 

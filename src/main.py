@@ -24,7 +24,7 @@ async def main():
         setup_logger(config)
 
         logger.info("=" * 70)
-        logger.info("🚀 Hermine Media Downloader startet...")
+        logger.info("Hermine Media Downloader startet...")
         logger.info("=" * 70)
         logger.info(f"Config: {config.to_dict()}")
 
@@ -36,33 +36,55 @@ async def main():
         db.initialize()
 
         # Hermine Client
-        logger.info(f"\n🔗 Verbinde zu {config.hermine.base_url}...")
+        logger.info(f"\nVerbinde zu {config.hermine.base_url}...")
         hermine = HermineClient(
             config.hermine.base_url,
             config.hermine.username,
             config.hermine.password,
             timeout=config.hermine.timeout,
-            verify_ssl=config.hermine.verify_ssl
+            verify_ssl=config.hermine.verify_ssl,
+            app_domain=config.hermine.app_domain,
+            file_domain=config.hermine.file_domain,
+            user_agent=config.hermine.user_agent,
+            app_name=config.hermine.app_name
         )
 
-        # Nextcloud Client (optional)
+        # Nextcloud Client (optional) - does NOT crash on failure
         nextcloud = None
         if config.nextcloud.enabled:
-            logger.info(f"☁️  Nextcloud Integration: {config.nextcloud.url}")
-            nextcloud = NextcloudClient(
-                config.nextcloud.url,
-                config.nextcloud.username,
-                config.nextcloud.password,
-                config.nextcloud.remote_path
-            )
+            logger.info(f"Nextcloud Integration: {config.nextcloud.url}")
+            try:
+                nextcloud = NextcloudClient(
+                    config.nextcloud.url,
+                    config.nextcloud.username,
+                    config.nextcloud.password,
+                    config.nextcloud.remote_path,
+                    connect_timeout=config.nextcloud.connect_timeout,
+                    upload_timeout=config.nextcloud.upload_timeout,
+                )
+                if nextcloud.is_connected:
+                    logger.info("Nextcloud verbunden")
+                else:
+                    logger.warning(
+                        "Nextcloud nicht erreichbar - Downloads werden lokal gespeichert, "
+                        "Upload wird spaeter nachgeholt"
+                    )
+            except Exception as e:
+                logger.warning(f"Nextcloud Initialisierung fehlgeschlagen: {e}")
+                logger.warning("Downloads werden lokal gespeichert, Upload wird spaeter nachgeholt")
+                nextcloud = None
 
         # Download Engine
         engine = DownloadEngine(config, hermine, db, nextcloud)
 
-        # Verarbeite Kanäle
+        # Pre-processing: handle corrupted files and pending uploads
+        await engine.redownload_corrupted_files()
+        await engine.retry_pending_uploads()
+
+        # Verarbeite Kanaele
         if not config.target_channels:
-            logger.warning("⚠️  Keine Kanäle konfiguriert in TARGET_CHANNELS")
-            logger.info("💡 Tipp: Nutze 'python3 -m src.cli list-channels' um IDs zu sehen")
+            logger.warning("Keine Kanaele konfiguriert in TARGET_CHANNELS")
+            logger.info("Tipp: Nutze 'python3 -m src.cli list-channels' um IDs zu sehen")
             return
 
         total_stats = {
@@ -86,25 +108,38 @@ async def main():
                 logger.error(f"Fehler bei Kanal {channel_id}: {e}")
                 total_stats['total_errors'] += 1
 
+        # Post-processing: retry uploads if Nextcloud came back
+        if nextcloud and not nextcloud.is_connected:
+            logger.info("Versuche Nextcloud-Reconnect nach Kanal-Verarbeitung...")
+            if nextcloud.reconnect():
+                engine.nextcloud = nextcloud
+                await engine.retry_pending_uploads()
+
         # Statistiken anzeigen
         engine.print_statistics()
 
+        # Final summary
+        db_stats = db.get_stats()
         logger.info("\n" + "=" * 70)
-        logger.info("✅ Abgeschlossen!")
+        logger.info("Abgeschlossen!")
         logger.info("=" * 70)
-        logger.info(f"  Kanäle verarbeitet: {total_stats['channels']}")
+        logger.info(f"  Kanaele verarbeitet: {total_stats['channels']}")
         logger.info(f"  Dateien heruntergeladen: {total_stats['total_downloaded']}")
-        logger.info(f"  Übersprungen: {total_stats['total_skipped']}")
+        logger.info(f"  Uebersprungen: {total_stats['total_skipped']}")
         logger.info(f"  Fehler: {total_stats['total_errors']}")
-        logger.info(f"  Gesamt-Größe: {total_stats['total_size'] / 1024 / 1024:.2f} MB")
+        logger.info(f"  Gesamt-Groesse: {total_stats['total_size'] / 1024 / 1024:.2f} MB")
+        if db_stats.get('pending_uploads', 0) > 0:
+            logger.warning(f"  Ausstehende Uploads: {db_stats['pending_uploads']}")
+        if db_stats.get('corrupted_files', 0) > 0:
+            logger.warning(f"  Korrupte Dateien: {db_stats['corrupted_files']}")
         logger.info("=" * 70)
 
     except KeyboardInterrupt:
-        logger.warning("\n⏹️  Abbruch durch Benutzer")
+        logger.warning("\nAbbruch durch Benutzer")
         sys.exit(130)
 
     except Exception as e:
-        logger.error(f"\n❌ Fataler Fehler: {e}", exc_info=True)
+        logger.error(f"\nFataler Fehler: {e}", exc_info=True)
         sys.exit(1)
 
 

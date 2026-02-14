@@ -32,7 +32,7 @@ class ManifestDB:
         """Initialize database schema"""
         try:
             cursor = self.connection.cursor()
-            
+
             # Downloaded files table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS downloaded_files (
@@ -51,7 +51,7 @@ class ManifestDB:
                     status TEXT DEFAULT 'completed'
                 )
             ''')
-            
+
             # Error log table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS download_errors (
@@ -63,7 +63,7 @@ class ManifestDB:
                     FOREIGN KEY (file_id) REFERENCES downloaded_files(file_id)
                 )
             ''')
-            
+
             # Channels metadata table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS channels (
@@ -74,47 +74,204 @@ class ManifestDB:
                     file_count INTEGER DEFAULT 0
                 )
             ''')
-            
+
             # Create indexes
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_file_hash ON downloaded_files(file_hash)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_channel_id ON downloaded_files(channel_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_sender ON downloaded_files(sender)')
-            
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_status ON downloaded_files(status)')
+
             self.connection.commit()
+
+            # Run migrations for existing databases
+            self._migrate()
+
             logger.info("✓ Manifest DB Schema initialisiert")
-            
+
         except sqlite3.Error as e:
             logger.error(f"✗ DB-Initialisierung fehlgeschlagen: {e}")
             raise
 
+    def _migrate(self) -> None:
+        """Run migrations for existing databases (add missing columns)."""
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute("PRAGMA table_info(downloaded_files)")
+            columns = {row['name'] for row in cursor.fetchall()}
+
+            if 'status' not in columns:
+                logger.info("Migration: Adding 'status' column to downloaded_files")
+                cursor.execute(
+                    "ALTER TABLE downloaded_files ADD COLUMN status TEXT DEFAULT 'completed'"
+                )
+                self.connection.commit()
+                logger.info("Migration: 'status' column added successfully")
+        except sqlite3.Error as e:
+            logger.warning(f"Migration check failed (non-critical): {e}")
+
     def file_exists(self, file_id: str) -> bool:
-        """Check if file already downloaded"""
+        """Check if file already downloaded and completed successfully."""
         try:
             cursor = self.connection.cursor()
-            cursor.execute('SELECT 1 FROM downloaded_files WHERE file_id = ?', (file_id,))
+            cursor.execute(
+                "SELECT 1 FROM downloaded_files WHERE file_id = ? AND status = 'completed'",
+                (file_id,)
+            )
             return cursor.fetchone() is not None
         except sqlite3.Error as e:
             logger.error(f"✗ DB-Abfrage fehlgeschlagen: {e}")
             return False
 
-    def insert_file(self, file_id: str, channel_id: str, message_id: str, 
+    def insert_file(self, file_id: str, channel_id: str, message_id: str,
                    filename: str, file_hash: Optional[str], file_size: int,
                    mime_type: str, sender: str, local_path: Optional[str] = None,
-                   nextcloud_path: Optional[str] = None) -> None:
+                   nextcloud_path: Optional[str] = None,
+                   status: str = 'completed') -> None:
         """Insert downloaded file record"""
         try:
             cursor = self.connection.cursor()
             cursor.execute('''
-                INSERT INTO downloaded_files 
-                (file_id, channel_id, message_id, filename, file_hash, file_size, 
-                 mime_type, sender, local_path, nextcloud_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO downloaded_files
+                (file_id, channel_id, message_id, filename, file_hash, file_size,
+                 mime_type, sender, local_path, nextcloud_path, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (file_id, channel_id, message_id, filename, file_hash, file_size,
-                   mime_type, sender, local_path, nextcloud_path))
+                   mime_type, sender, local_path, nextcloud_path, status))
             self.connection.commit()
         except sqlite3.Error as e:
             logger.error(f"✗ Datensatz-Insert fehlgeschlagen: {e}")
             raise
+
+    def upsert_file(self, file_id: str, channel_id: str, message_id: str,
+                    filename: str, file_hash: Optional[str], file_size: int,
+                    mime_type: str, sender: str, local_path: Optional[str] = None,
+                    nextcloud_path: Optional[str] = None,
+                    status: str = 'completed') -> None:
+        """Insert or replace file record. Handles re-processing gracefully."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO downloaded_files
+                (file_id, channel_id, message_id, filename, file_hash, file_size,
+                 mime_type, sender, local_path, nextcloud_path, status, download_timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (file_id, channel_id, message_id, filename, file_hash, file_size,
+                   mime_type, sender, local_path, nextcloud_path, status))
+            self.connection.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Datensatz-Upsert fehlgeschlagen: {e}")
+            raise
+
+    def update_file(self, file_id: str, **kwargs) -> bool:
+        """Update an existing file record by file_id.
+
+        Args:
+            file_id: The file ID to update
+            **kwargs: Column names and values to update
+
+        Returns:
+            True if a row was updated
+        """
+        if not kwargs:
+            return False
+        try:
+            set_clause = ", ".join(f"{k} = ?" for k in kwargs.keys())
+            values = list(kwargs.values()) + [file_id]
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"UPDATE downloaded_files SET {set_clause} WHERE file_id = ?",
+                values
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as e:
+            logger.error(f"✗ Datensatz-Update fehlgeschlagen: {e}")
+            return False
+
+    def mark_corrupted(self, file_id: str) -> bool:
+        """Mark a file as corrupted for re-download on next sync."""
+        success = self.update_file(file_id, status='corrupted')
+        if success:
+            logger.info(f"✓ Datei {file_id} als korrupt markiert")
+        return success
+
+    def mark_upload_pending(self, file_id: str) -> bool:
+        """Mark a file as needing re-upload to Nextcloud."""
+        success = self.update_file(file_id, status='upload_pending')
+        if success:
+            logger.info(f"✓ Datei {file_id} für Re-Upload vorgemerkt")
+        return success
+
+    def mark_upload_failed(self, file_id: str) -> bool:
+        """Mark a file as having a failed Nextcloud upload."""
+        return self.update_file(file_id, status='upload_failed')
+
+    def mark_all_for_revalidation(self, channel_id: Optional[str] = None,
+                                   sender: Optional[str] = None) -> int:
+        """Mark all matching files as corrupted so next downloader run revalidates them.
+
+        Files marked corrupted will be deleted from DB by the downloader and re-downloaded.
+
+        Args:
+            channel_id: Optional channel filter
+            sender: Optional sender filter
+
+        Returns:
+            Number of files marked
+        """
+        try:
+            cursor = self.connection.cursor()
+            query = "UPDATE downloaded_files SET status = 'corrupted' WHERE status = 'completed'"
+            params = []
+
+            if channel_id:
+                query += " AND channel_id = ?"
+                params.append(channel_id)
+            if sender:
+                query += " AND sender = ?"
+                params.append(sender)
+
+            cursor.execute(query, params)
+            self.connection.commit()
+            count = cursor.rowcount
+            logger.info(f"✓ {count} Dateien für Revalidierung markiert")
+            return count
+        except sqlite3.Error as e:
+            logger.error(f"✗ Massen-Markierung fehlgeschlagen: {e}")
+            return 0
+
+    def get_files_needing_upload(self) -> List[Dict[str, Any]]:
+        """Get files that need to be uploaded to Nextcloud.
+
+        Returns all files with pending/failed upload status, including those
+        with no local_path (they need to be re-downloaded first).
+        """
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                SELECT file_id, filename, local_path, nextcloud_path,
+                       channel_id, mime_type, sender
+                FROM downloaded_files
+                WHERE status IN ('upload_pending', 'upload_failed')
+            ''')
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"✗ Abfrage fehlgeschlagen: {e}")
+            return []
+
+    def get_corrupted_files(self) -> List[Dict[str, Any]]:
+        """Get files marked as corrupted for re-download."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                SELECT file_id, filename, channel_id, local_path, nextcloud_path
+                FROM downloaded_files
+                WHERE status = 'corrupted'
+            ''')
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"✗ Abfrage fehlgeschlagen: {e}")
+            return []
 
     def record_error(self, file_id: str, error_message: str) -> None:
         """Record download error"""
@@ -132,18 +289,35 @@ class ManifestDB:
         """Get database statistics"""
         try:
             cursor = self.connection.cursor()
-            
-            cursor.execute('SELECT COUNT(*) as count, SUM(file_size) as total_size FROM downloaded_files')
+
+            cursor.execute(
+                "SELECT COUNT(*) as count, SUM(file_size) as total_size "
+                "FROM downloaded_files WHERE status = 'completed'"
+            )
             row = cursor.fetchone()
-            
+
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM downloaded_files "
+                "WHERE status IN ('upload_pending', 'upload_failed')"
+            )
+            pending_row = cursor.fetchone()
+
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM downloaded_files WHERE status = 'corrupted'"
+            )
+            corrupted_row = cursor.fetchone()
+
             return {
                 'total_files': row['count'] or 0,
                 'total_size': row['total_size'] or 0,
-                'total_errors': self._count_errors()
+                'total_errors': self._count_errors(),
+                'pending_uploads': pending_row['count'] or 0,
+                'corrupted_files': corrupted_row['count'] or 0,
             }
         except sqlite3.Error as e:
             logger.error(f"✗ Statistik-Abfrage fehlgeschlagen: {e}")
-            return {'total_files': 0, 'total_size': 0, 'total_errors': 0}
+            return {'total_files': 0, 'total_size': 0, 'total_errors': 0,
+                    'pending_uploads': 0, 'corrupted_files': 0}
 
     def _count_errors(self) -> int:
         """Count total errors"""
@@ -161,7 +335,10 @@ class ManifestDB:
             cursor = self.connection.cursor()
 
             # Basic stats
-            cursor.execute('SELECT COUNT(*) as count, SUM(file_size) as total_size FROM downloaded_files')
+            cursor.execute(
+                "SELECT COUNT(*) as count, SUM(file_size) as total_size "
+                "FROM downloaded_files WHERE status = 'completed'"
+            )
             row = cursor.fetchone()
 
             # Count unique channels
@@ -172,16 +349,32 @@ class ManifestDB:
             cursor.execute('SELECT COUNT(DISTINCT sender) as senders FROM downloaded_files')
             senders_row = cursor.fetchone()
 
+            # Count pending uploads
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM downloaded_files "
+                "WHERE status IN ('upload_pending', 'upload_failed')"
+            )
+            pending_row = cursor.fetchone()
+
+            # Count corrupted
+            cursor.execute(
+                "SELECT COUNT(*) as count FROM downloaded_files WHERE status = 'corrupted'"
+            )
+            corrupted_row = cursor.fetchone()
+
             return {
                 'total_files': row['count'] or 0,
                 'total_size': row['total_size'] or 0,
                 'channels': channels_row['channels'] or 0,
                 'senders': senders_row['senders'] or 0,
-                'errors': self._count_errors()
+                'errors': self._count_errors(),
+                'pending_uploads': pending_row['count'] or 0,
+                'corrupted_files': corrupted_row['count'] or 0,
             }
         except sqlite3.Error as e:
             logger.error(f"✗ Statistik-Abfrage fehlgeschlagen: {e}")
-            return {'total_files': 0, 'total_size': 0, 'channels': 0, 'senders': 0, 'errors': 0}
+            return {'total_files': 0, 'total_size': 0, 'channels': 0, 'senders': 0,
+                    'errors': 0, 'pending_uploads': 0, 'corrupted_files': 0}
 
     def get_files_by_channel(self) -> Dict[str, int]:
         """Get file counts by channel"""
@@ -222,19 +415,9 @@ class ManifestDB:
     def get_all_files(self, limit: int = 100, offset: int = 0,
                       search: Optional[str] = None,
                       channel_id: Optional[str] = None,
-                      sender: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get all downloaded files with optional filtering.
-
-        Args:
-            limit: Maximum number of files to return
-            offset: Offset for pagination
-            search: Search term for filename
-            channel_id: Filter by channel
-            sender: Filter by sender
-
-        Returns:
-            List of file records as dictionaries
-        """
+                      sender: Optional[str] = None,
+                      status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get all downloaded files with optional filtering."""
         try:
             cursor = self.connection.cursor()
 
@@ -254,6 +437,10 @@ class ManifestDB:
                 query += ' AND sender = ?'
                 params.append(sender)
 
+            if status:
+                query += ' AND status = ?'
+                params.append(status)
+
             query += ' ORDER BY download_timestamp DESC LIMIT ? OFFSET ?'
             params.extend([limit, offset])
 
@@ -265,14 +452,7 @@ class ManifestDB:
             return []
 
     def get_file_by_id(self, file_id: str) -> Optional[Dict[str, Any]]:
-        """Get a single file by its file_id.
-
-        Args:
-            file_id: The file ID to look up
-
-        Returns:
-            File record as dictionary or None
-        """
+        """Get a single file by its file_id."""
         try:
             cursor = self.connection.cursor()
             cursor.execute('SELECT * FROM downloaded_files WHERE file_id = ?', (file_id,))
@@ -283,14 +463,7 @@ class ManifestDB:
             return None
 
     def delete_file_record(self, file_id: str) -> bool:
-        """Delete a file record from the database (allows re-download).
-
-        Args:
-            file_id: The file ID to delete
-
-        Returns:
-            True if deleted, False otherwise
-        """
+        """Delete a file record from the database (allows re-download)."""
         try:
             cursor = self.connection.cursor()
             cursor.execute('DELETE FROM downloaded_files WHERE file_id = ?', (file_id,))
@@ -305,17 +478,9 @@ class ManifestDB:
 
     def count_files(self, search: Optional[str] = None,
                     channel_id: Optional[str] = None,
-                    sender: Optional[str] = None) -> int:
-        """Count files with optional filtering.
-
-        Args:
-            search: Search term for filename
-            channel_id: Filter by channel
-            sender: Filter by sender
-
-        Returns:
-            Total count of matching files
-        """
+                    sender: Optional[str] = None,
+                    status: Optional[str] = None) -> int:
+        """Count files with optional filtering."""
         try:
             cursor = self.connection.cursor()
 
@@ -334,6 +499,10 @@ class ManifestDB:
             if sender:
                 query += ' AND sender = ?'
                 params.append(sender)
+
+            if status:
+                query += ' AND status = ?'
+                params.append(status)
 
             cursor.execute(query, params)
             row = cursor.fetchone()

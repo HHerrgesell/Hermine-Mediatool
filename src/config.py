@@ -33,6 +33,8 @@ class NextcloudConfig:
     remote_path: str = "/Hermine-Media/"
     auto_upload: bool = False
     delete_local_after_upload: bool = False
+    upload_timeout: int = 120
+    connect_timeout: int = 30
 
 
 @dataclass
@@ -159,7 +161,9 @@ class Config:
             password=os.getenv('NEXTCLOUD_PASSWORD', ''),
             remote_path=os.getenv('NEXTCLOUD_REMOTE_PATH', '/Hermine-Media/'),
             auto_upload=os.getenv('NEXTCLOUD_AUTO_UPLOAD', 'false').lower() == 'true',
-            delete_local_after_upload=os.getenv('DELETE_LOCAL_AFTER_UPLOAD', 'false').lower() == 'true'
+            delete_local_after_upload=os.getenv('DELETE_LOCAL_AFTER_UPLOAD', 'false').lower() == 'true',
+            upload_timeout=int(os.getenv('NEXTCLOUD_UPLOAD_TIMEOUT', '120')),
+            connect_timeout=int(os.getenv('NEXTCLOUD_CONNECT_TIMEOUT', '30'))
         )
 
         # Logging Configuration
