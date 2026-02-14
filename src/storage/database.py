@@ -250,7 +250,7 @@ class ManifestDB:
             cursor = self.connection.cursor()
             cursor.execute('''
                 SELECT file_id, filename, local_path, nextcloud_path,
-                       channel_id, mime_type, sender
+                       channel_id, mime_type, sender, download_timestamp
                 FROM downloaded_files
                 WHERE status IN ('upload_pending', 'upload_failed')
             ''')

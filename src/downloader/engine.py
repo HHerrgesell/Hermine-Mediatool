@@ -82,7 +82,7 @@ class DownloadEngine:
                 continue
 
             try:
-                nc_remote_path = file_info['filename']
+                nc_remote_path = self._build_retry_remote_path(file_info)
                 nc_path = await self.nextcloud.upload_file_with_verification(
                     local_path, nc_remote_path
                 )
@@ -346,6 +346,45 @@ class DownloadEngine:
         filename_safe = PathBuilder._sanitize_filename(media_file.filename)
 
         # Replace template placeholders
+        path_str = self.config.storage.path_template
+        replacements = {
+            'year': str(timestamp.year),
+            'month': str(timestamp.month),
+            'month:02d': f"{timestamp.month:02d}",
+            'day': str(timestamp.day),
+            'day:02d': f"{timestamp.day:02d}",
+            'sender': sender_safe,
+            'filename': filename_safe,
+            'channel_name': channel_safe
+        }
+
+        for placeholder, value in replacements.items():
+            path_str = path_str.replace('{' + placeholder + '}', value)
+
+        return path_str
+
+    def _build_retry_remote_path(self, file_info: dict) -> str:
+        """Build a templated remote path for retry uploads from DB record data.
+
+        Reconstructs the same path structure as _get_templated_path would produce
+        for a fresh download, using the stored sender, filename, and timestamp.
+        """
+        sender = file_info.get('sender') or 'Unknown'
+        filename = file_info.get('filename', 'unknown')
+        timestamp_str = file_info.get('download_timestamp')
+
+        # Parse the DB timestamp (ISO format: 2026-02-12 22:02:18)
+        timestamp = datetime.now()
+        if timestamp_str:
+            try:
+                timestamp = datetime.fromisoformat(timestamp_str)
+            except (ValueError, TypeError):
+                pass
+
+        sender_safe = PathBuilder._sanitize_name(sender)
+        filename_safe = PathBuilder._sanitize_filename(filename)
+        channel_safe = PathBuilder._sanitize_name(file_info.get('channel_id') or 'Unknown')
+
         path_str = self.config.storage.path_template
         replacements = {
             'year': str(timestamp.year),

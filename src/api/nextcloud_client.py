@@ -3,6 +3,7 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+import httpx
 from webdav4.client import Client as WebDAVClient
 
 logger = logging.getLogger(__name__)
@@ -32,7 +33,12 @@ class NextcloudClient:
             self.client = WebDAVClient(
                 base_url=self.webdav_url,
                 auth=(username, password),
-                timeout=connect_timeout,
+                timeout=httpx.Timeout(
+                    connect=connect_timeout,
+                    read=upload_timeout,
+                    write=upload_timeout,
+                    pool=connect_timeout,
+                ),
             )
             self._verify_connection()
         except Exception as e:
@@ -79,7 +85,12 @@ class NextcloudClient:
             self.client = WebDAVClient(
                 base_url=self.webdav_url,
                 auth=(self.username, self.password),
-                timeout=self.connect_timeout,
+                timeout=httpx.Timeout(
+                    connect=self.connect_timeout,
+                    read=self.upload_timeout,
+                    write=self.upload_timeout,
+                    pool=self.connect_timeout,
+                ),
             )
             self._verify_connection()
             return self._connected
