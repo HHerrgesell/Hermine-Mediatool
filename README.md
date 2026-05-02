@@ -457,6 +457,6 @@ Für Bugs und Fragen: [Issues](https://github.com/HHerrgesell/Hermine-Mediatool/
 
 ---
 
-**Version:** 1.3.0  
-**Zuletzt aktualisiert:** 2026-01-18  
-**Status:** Production Ready ✅
+**Version:** 1.3.1  
+**Zuletzt aktualisiert:** 2026-05-02  
+**Status:** Production Ready (Rolling Release) ✅
