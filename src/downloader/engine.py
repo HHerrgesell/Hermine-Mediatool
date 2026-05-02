@@ -207,25 +207,28 @@ class DownloadEngine:
                         timeout=self.config.download.download_timeout
                     )
 
-                    # Validate file data before saving
-                    self._validate_file_data(file_data, media_file)
-
-                    # Save locally using PathBuilder
+                    # Validate, save, EXIF and hash run in a thread so the
+                    # event loop stays free for parallel downloads.
                     local_path = self._get_local_path(media_file)
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    local_path.write_bytes(file_data)
 
-                    # Process EXIF data - check/set Author from sender name
-                    if self.config.storage.extract_metadata:
-                        self.exif_processor.process_file(
-                            local_path,
-                            preserve_timestamp=True,
-                            sender_name=media_file.sender_name
+                    def _save_and_process() -> tuple[int, Optional[str]]:
+                        self._validate_file_data(file_data, media_file)
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
+                        local_path.write_bytes(file_data)
+                        if self.config.storage.extract_metadata:
+                            self.exif_processor.process_file(
+                                local_path,
+                                preserve_timestamp=True,
+                                sender_name=media_file.sender_name,
+                            )
+                        digest = (
+                            hashlib.sha256(file_data).hexdigest()
+                            if self.config.storage.calculate_checksums
+                            else None
                         )
+                        return len(file_data), digest
 
-                    # Calculate hash
-                    file_hash = hashlib.sha256(file_data).hexdigest() if self.config.storage.calculate_checksums else None
-                    file_size = len(file_data)
+                    file_size, file_hash = await asyncio.to_thread(_save_and_process)
 
                     # Upload to Nextcloud (optional) - use templated path
                     nc_path = None
