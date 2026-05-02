@@ -4,6 +4,7 @@ import asyncio
 import random
 import string
 import json
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -93,6 +94,7 @@ class HermineClient:
 
         self._private_key_cache = None
         self._crypto_cache = None
+        self._crypto_lock = threading.Lock()
 
         # Set headers matching reference implementation
         self.session.headers.update({
@@ -212,22 +214,28 @@ class HermineClient:
     def _get_crypto(self) -> "HermineCrypto":
         """Get cached HermineCrypto instance (parsed RSA key reused).
 
-        RSA.import_key with a passphrase runs PBKDF2 and is expensive
-        (~5-10s). Cache the parsed key/instance so we pay this cost once
-        per process instead of once per file download.
+        RSA.import_key with a passphrase runs PBKDF2 and is expensive.
+        Lock so only one thread builds it; the rest reuse the cache.
+        Without the lock, parallel first-time downloads all run PBKDF2
+        and race on the shared requests.Session for the private key
+        fetch, which deadlocks under load.
         """
         if self._crypto_cache is not None:
             return self._crypto_cache
 
-        from ..crypto import HermineCrypto
-        from ..config import Config
+        with self._crypto_lock:
+            if self._crypto_cache is not None:
+                return self._crypto_cache
 
-        config = Config()
-        self._crypto_cache = HermineCrypto(
-            private_key_pem=self._get_private_key(),
-            encryption_password=config.hermine.encryption_key,
-        )
-        return self._crypto_cache
+            from ..crypto import HermineCrypto
+            from ..config import Config
+
+            config = Config()
+            self._crypto_cache = HermineCrypto(
+                private_key_pem=self._get_private_key(),
+                encryption_password=config.hermine.encryption_key,
+            )
+            return self._crypto_cache
 
     def _get_private_key(self) -> str:
         """Get user's private RSA key from API (cached)"""

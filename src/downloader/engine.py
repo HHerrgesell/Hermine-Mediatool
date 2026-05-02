@@ -170,6 +170,13 @@ class DownloadEngine:
             if not new_files:
                 return stats
 
+            # Pre-warm the RSA key cache before parallel downloads —
+            # otherwise N threads race on the first-time PBKDF2 import
+            # and on the shared requests.Session for the private-key
+            # fetch, which can deadlock the connection pool.
+            if any(mf.encrypted for mf in new_files):
+                await asyncio.to_thread(self.hermine._get_crypto)
+
             # Start parallel downloads
             tasks = [self._download_file_safe(mf) for mf in new_files]
             results = await asyncio.gather(*tasks, return_exceptions=True)
