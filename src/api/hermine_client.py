@@ -4,6 +4,7 @@ import asyncio
 import random
 import string
 import json
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -92,6 +93,8 @@ class HermineClient:
             logger.info(f"✓ Generated new device_id: {self.device_id[:8]}...")
 
         self._private_key_cache = None
+        self._crypto_cache = None
+        self._crypto_lock = threading.Lock()
 
         # Set headers matching reference implementation
         self.session.headers.update({
@@ -207,6 +210,32 @@ class HermineClient:
         except (RequestException, ValueError) as e:
             logger.error(f"✗ Authentifizierung fehlgeschlagen: {e}")
             raise
+
+    def _get_crypto(self) -> "HermineCrypto":
+        """Get cached HermineCrypto instance (parsed RSA key reused).
+
+        RSA.import_key with a passphrase runs PBKDF2 and is expensive.
+        Lock so only one thread builds it; the rest reuse the cache.
+        Without the lock, parallel first-time downloads all run PBKDF2
+        and race on the shared requests.Session for the private key
+        fetch, which deadlocks under load.
+        """
+        if self._crypto_cache is not None:
+            return self._crypto_cache
+
+        with self._crypto_lock:
+            if self._crypto_cache is not None:
+                return self._crypto_cache
+
+            from ..crypto import HermineCrypto
+            from ..config import Config
+
+            config = Config()
+            self._crypto_cache = HermineCrypto(
+                private_key_pem=self._get_private_key(),
+                encryption_password=config.hermine.encryption_key,
+            )
+            return self._crypto_cache
 
     def _get_private_key(self) -> str:
         """Get user's private RSA key from API (cached)"""
@@ -456,16 +485,10 @@ class HermineClient:
 
                     # The response is encrypted, so decrypt it
                     if media_file.encrypted and media_file.file_key and media_file.file_iv:
-                        from ..crypto import HermineCrypto
-                        from ..config import Config
                         from Crypto.Cipher import AES
                         from Crypto.Util.Padding import unpad
 
-                        config = Config()
-                        crypto = HermineCrypto(
-                            private_key_pem=self._get_private_key(),
-                            encryption_password=config.hermine.encryption_key
-                        )
+                        crypto = self._get_crypto()
 
                         # Decrypt chat key
                         decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
@@ -518,7 +541,9 @@ class HermineClient:
 
             # Try to download full file first if requested
             if prefer_full:
-                full_file_data = self._download_full_file_from_endpoint(media_file, timeout)
+                full_file_data = await asyncio.to_thread(
+                    self._download_full_file_from_endpoint, media_file, timeout
+                )
                 if full_file_data:
                     return full_file_data
                 logger.debug("Full file download failed or not available, using embedded thumbnail data")
@@ -527,82 +552,51 @@ class HermineClient:
             if not media_file.base_64_data:
                 raise ValueError(f"No base64 data found for file {media_file.file_id}")
 
-            # Decode from hex string to bytes (it's hex-encoded, not base64!)
-            encrypted_data = bytes.fromhex(media_file.base_64_data)
-            logger.debug(f"Decoded {len(encrypted_data)} bytes from hex (encrypted thumbnail)")
-
             # Decrypt if file is encrypted
             if media_file.encrypted and media_file.file_key and media_file.file_iv:
                 try:
-                    # Import crypto here to avoid circular imports
-                    from ..crypto import HermineCrypto
-                    from ..config import Config
-
-                    # Get encryption password from config
-                    config = Config()
-                    crypto = HermineCrypto(
-                        private_key_pem=self._get_private_key(),
-                        encryption_password=config.hermine.encryption_key
+                    return await asyncio.to_thread(
+                        self._decrypt_thumbnail_blob, media_file
                     )
-
-                    # Decrypt the chat key first (it's RSA-encrypted and base64-encoded)
-                    logger.debug(f"Decrypting chat_key (length: {len(media_file.chat_key)})")
-                    decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
-                    logger.debug(f"Chat key decrypted: {len(decrypted_chat_key)} bytes")
-
-                    # The file_key is encrypted with the chat_key
-                    # Decrypt it using AES with the file_iv
-                    file_key_hex = media_file.file_key
-                    file_iv_hex = media_file.file_iv
-
-                    logger.debug(f"File key hex length: {len(file_key_hex)}, IV hex length: {len(file_iv_hex)}")
-
-                    # Decrypt the file key using the chat key
-                    encrypted_file_key = bytes.fromhex(file_key_hex)
-                    file_key_iv = bytes.fromhex(file_iv_hex)
-
-                    logger.debug(f"Decrypting file key ({len(encrypted_file_key)} bytes) with chat key...")
-
-                    from Crypto.Cipher import AES
-                    from Crypto.Util.Padding import unpad
-
-                    # Decrypt the file key using AES-CBC with chat_key
-                    cipher = AES.new(decrypted_chat_key, AES.MODE_CBC, iv=file_key_iv)
-                    padded_file_key = cipher.decrypt(encrypted_file_key)
-                    file_key_bytes = unpad(padded_file_key, AES.block_size)
-
-                    logger.debug(f"Decrypted file key: {len(file_key_bytes)} bytes")
-
-                    # Use e2e_iv for decrypting the actual file data
-                    file_data_iv = bytes.fromhex(media_file.e2e_iv)
-                    logger.debug(f"Using e2e_iv for file data decryption: {len(file_data_iv)} bytes")
-
-                    # Decrypt the file data using the decrypted file key and e2e_iv
-                    decrypted_data = crypto.decrypt_file(
-                        encrypted_data,
-                        file_key_bytes,
-                        file_data_iv
-                    )
-
-                    logger.info(f"✓ Decrypted file (thumbnail): {len(encrypted_data)} → {len(decrypted_data)} bytes")
-                    return decrypted_data
-
                 except Exception as e:
                     logger.error(f"✗ Decryption failed: {e}")
-                    logger.debug(f"File key length: {len(media_file.file_key)}, IV length: {len(media_file.file_iv)}")
-                    logger.debug(f"Encrypted data length: {len(encrypted_data)}")
                     raise
-            else:
-                # File is not encrypted, return as-is
-                logger.debug(f"File is not encrypted, returning {len(encrypted_data)} bytes")
-                return encrypted_data
+
+            # File is not encrypted, return as-is
+            encrypted_data = bytes.fromhex(media_file.base_64_data)
+            logger.debug(f"File is not encrypted, returning {len(encrypted_data)} bytes")
+            return encrypted_data
 
         except RequestException as e:
             logger.error(f"✗ Download fehlgeschlagen: {e}")
             raise
         except Exception as e:
-            logger.error(f"✗ Decryption failed: {e}")
+            logger.error(f"✗ Download/decryption failed: {e}")
             raise
+
+    def _decrypt_thumbnail_blob(self, media_file: MediaFile) -> bytes:
+        """Decrypt the embedded thumbnail blob (sync, runs in thread)."""
+        from Crypto.Cipher import AES
+        from Crypto.Util.Padding import unpad
+
+        encrypted_data = bytes.fromhex(media_file.base_64_data)
+        logger.debug(f"Decoded {len(encrypted_data)} bytes from hex (encrypted thumbnail)")
+
+        crypto = self._get_crypto()
+
+        decrypted_chat_key = crypto.decrypt_conversation_key(media_file.chat_key)
+
+        encrypted_file_key = bytes.fromhex(media_file.file_key)
+        file_key_iv = bytes.fromhex(media_file.file_iv)
+        cipher = AES.new(decrypted_chat_key, AES.MODE_CBC, iv=file_key_iv)
+        padded_file_key = cipher.decrypt(encrypted_file_key)
+        file_key_bytes = unpad(padded_file_key, AES.block_size)
+
+        file_data_iv = bytes.fromhex(media_file.e2e_iv)
+        decrypted_data = crypto.decrypt_file(encrypted_data, file_key_bytes, file_data_iv)
+
+        logger.info(f"✓ Decrypted file (thumbnail): {len(encrypted_data)} → {len(decrypted_data)} bytes")
+        return decrypted_data
 
     def debug_dump_file_response(self, channel_id: str, limit: int = 1) -> Dict[str, Any]:
         """Debug method: Dump full API response for files in a channel
